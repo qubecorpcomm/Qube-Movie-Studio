@@ -1,0 +1,14 @@
+{
+  "name": "movie-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Movie artwork, trailers and newsletter workspace",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "dev": "node --env-file-if-exists=.env server.mjs",
+    "test": "node --test"
+  },
+  "dependencies": { "pdfjs-dist": "5.6.205", "jszip": "3.10.1" }
+}
