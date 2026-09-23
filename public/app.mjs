@@ -1,543 +1,1078 @@
-import { parseMovieListText, generateNewsletterHTML } from './core.mjs';
+import { parseMovieListText, generateNewsletterHTML, langCode } from './core.mjs';
 
-// Application State
+// Application Shared State
 const state = {
   movies: [],
+  selectedUid: null,
+  activeTab: 'library',
   status: { tmdb: false, youtube: false },
-  selectedMovieId: null,
-  activeModal: null,
-  newsletterConfig: {
-    title: 'Weekly Movie Brief',
-    subtitle: 'Hand-picked featured releases & trailers',
-    headerBg: '#0f172a',
-    headerTextColor: '#ffffff',
-    accentColor: '#2563eb'
+  batchRunning: false,
+  stopBatchRequested: false,
+  filter: '',
+  newsletter: {
+    title: 'This week at the movies',
+    intro: 'Discover the latest releases, with trailers and technical details in one place.',
+    topBannerUrl: '',
+    topBannerLink: '',
+    secondBannerUrl: '',
+    secondBannerLink: '',
+    footer: 'Movie Studio · Artwork and metadata provided by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.'
   }
 };
 
-// DOM Elements
-const statusBadge = document.getElementById('statusBadge');
-const apiAlert = document.getElementById('apiAlert');
-const movieCount = document.getElementById('movieCount');
-const movieGrid = document.getElementById('movieGrid');
-const selectedCount = document.getElementById('selectedCount');
-const newsletterPreview = document.getElementById('newsletterPreview');
-const zipSelectionGrid = document.getElementById('zipSelectionGrid');
-const zipCount = document.getElementById('zipCount');
-const btnDownloadZIP = document.getElementById('btnDownloadZIP');
+const SAMPLE_MOVIES_TEXT = `Vikram (2022) Tamil
+Interstellar | 2014 | English
+Oppenheimer (2023)
+Dune: Part Two (2024)`;
 
-// Initialize App
+// DOM Initialization
 document.addEventListener('DOMContentLoaded', () => {
+  loadLocalState();
   checkAPIStatus();
-  setupTabNavigation();
-  setupEventListeners();
-  updateWorkspaceUI();
+  setupNavigation();
+  setupEventHandlers();
+
+  // If initial state is empty, load sample movies
+  if (state.movies.length === 0) {
+    addMoviesFromParsedList(parseMovieListText(SAMPLE_MOVIES_TEXT));
+  } else {
+    if (!state.selectedUid && state.movies.length > 0) {
+      state.selectedUid = state.movies[0].uid;
+    }
+    updateAllUI();
+  }
 });
 
-// Check Server API Capabilities
+// Save / Load Local State
+function saveLocalState() {
+  try {
+    const payload = {
+      movies: state.movies,
+      selectedUid: state.selectedUid,
+      newsletter: state.newsletter
+    };
+    localStorage.setItem('movie_studio_state_v1', JSON.stringify(payload));
+  } catch (err) {
+    console.warn('Could not save to localStorage', err);
+  }
+}
+
+function loadLocalState() {
+  try {
+    const raw = localStorage.getItem('movie_studio_state_v1');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed.movies)) state.movies = parsed.movies;
+      if (parsed.selectedUid) state.selectedUid = parsed.selectedUid;
+      if (parsed.newsletter) state.newsletter = { ...state.newsletter, ...parsed.newsletter };
+    }
+  } catch (err) {
+    console.warn('Could not load from localStorage', err);
+  }
+}
+
+// API Connection Status
 async function checkAPIStatus() {
+  const statusDot = document.querySelector('.status-dot');
+  const statusText = document.getElementById('connectionStatusText');
+  const modalStatusLine = document.getElementById('modalStatusLine');
+
   try {
     const res = await fetch('/api/status');
     const data = await res.json();
     state.status = data;
 
     if (data.tmdb) {
-      statusBadge.innerHTML = `<span class="badge badge-success">TMDB Connected ✅</span>`;
-      apiAlert.classList.add('hidden');
+      statusDot.className = 'status-dot';
+      statusText.textContent = 'TMDB connected';
+      modalStatusLine.textContent = `TMDB: Configured ✅ · YouTube: ${data.youtube ? 'Configured ✅' : 'Not configured'}`;
     } else {
-      statusBadge.innerHTML = `<span class="badge badge-warning">TMDB Unconfigured</span>`;
-      apiAlert.classList.remove('hidden');
+      statusDot.className = 'status-dot offline';
+      statusText.textContent = 'Manual mode · add API keys';
+      modalStatusLine.textContent = 'TMDB: Key missing (Offline Mode) · YouTube: Key missing';
     }
   } catch {
-    statusBadge.innerHTML = `<span class="badge badge-danger">Server Offline</span>`;
+    statusDot.className = 'status-dot offline';
+    statusText.textContent = 'Server unavailable';
+    modalStatusLine.textContent = 'Server could not be reached.';
   }
 }
 
-// Setup Tab Switching
-function setupTabNavigation() {
-  const tabs = document.querySelectorAll('.tab-btn');
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      const target = tab.dataset.tab;
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      
-      tab.classList.add('active');
-      document.getElementById(`tab-${target}`).classList.add('active');
-
-      if (target === 'newsletter') {
-        renderNewsletterPreview();
-      } else if (target === 'zip') {
-        renderZipGallery();
-      }
+// Navigation Tabs
+function setupNavigation() {
+  const navBtns = document.querySelectorAll('.nav-item');
+  navBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      setActiveTab(tab);
     });
   });
 }
 
-// Event Listeners
-function setupEventListeners() {
-  // Demo Data Button
-  document.getElementById('btnDemo').addEventListener('click', loadDemoMovies);
+function setActiveTab(tab) {
+  state.activeTab = tab;
 
-  // Import Text
-  document.getElementById('btnImportText').addEventListener('click', () => {
-    const text = document.getElementById('importText').value;
+  document.querySelectorAll('.nav-item').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+
+  document.querySelectorAll('.view-panel').forEach(p => {
+    p.classList.toggle('active', p.id === `view-${tab}`);
+  });
+
+  // Breadcrumb & Headings Sync
+  const bcPath = document.getElementById('bcPath');
+  const pageTitle = document.getElementById('pageTitle');
+  const pageSub = document.getElementById('pageSub');
+
+  const titles = {
+    library: { path: 'MOVIE STUDIO / LIBRARY', h1: 'Your movie library', dot: '.', sub: 'Bring in your titles. Find the artwork. Build something worth opening.' },
+    artwork: { path: 'MOVIE STUDIO / ARTWORK', h1: 'The art of the release', dot: '.', sub: 'Choose posters, backdrops and logos in the language that fits.' },
+    trailers: { path: 'MOVIE STUDIO / TRAILERS', h1: 'Let the story begin', dot: '.', sub: 'Find the right trailer, review alternatives, or add your own link.' },
+    newsletter: { path: 'MOVIE STUDIO / NEWSLETTER', h1: 'Ready for the inbox', dot: '.', sub: 'Turn your curated movie list into a newsletter worth opening.' }
+  };
+
+  const t = titles[tab] || titles.library;
+  bcPath.textContent = t.path;
+  pageTitle.innerHTML = `${t.h1}<span class="period-dot">${t.dot}</span>`;
+  pageSub.textContent = t.sub;
+
+  updateAllUI();
+}
+
+// Notice Bar Update
+function showNotice(msg, type = 'info') {
+  const bar = document.getElementById('noticeBar');
+  bar.textContent = msg;
+  bar.className = `notice-bar ${type}`;
+}
+
+// Global Event Handlers Setup
+function setupEventHandlers() {
+  // Focus textarea
+  document.getElementById('btnAddMovieFocus').addEventListener('click', () => {
+    setActiveTab('library');
+    const textarea = document.getElementById('movieInputText');
+    textarea.focus();
+  });
+
+  // Try sample list
+  document.getElementById('btnTrySample').addEventListener('click', () => {
+    document.getElementById('movieInputText').value = SAMPLE_MOVIES_TEXT;
+  });
+
+  // Add titles
+  document.getElementById('btnAddTitles').addEventListener('click', () => {
+    const text = document.getElementById('movieInputText').value;
     const parsed = parseMovieListText(text);
     if (parsed.length > 0) {
-      addMoviesToState(parsed);
-      document.getElementById('importText').value = '';
-      switchTab('workspace');
+      addMoviesFromParsedList(parsed);
+      document.getElementById('movieInputText').value = '';
+      showNotice(`Added ${parsed.length} movie(s) to your library.`);
+    } else {
+      showNotice('Please enter movie titles or paste a list.', 'error');
     }
   });
 
-  document.getElementById('btnClearImport').addEventListener('click', () => {
-    document.getElementById('importText').value = '';
+  // File import (.txt, .csv, .pdf)
+  const fileImportInput = document.getElementById('fileImportInput');
+  document.getElementById('btnImportFile').addEventListener('click', () => fileImportInput.click());
+  fileImportInput.addEventListener('change', handleFileImport);
+
+  // Batch search button
+  document.getElementById('btnFindArtworkAll').addEventListener('click', runBatchSearch);
+  const btnFindTrailers = document.getElementById('btnFindTrailersAll');
+  if (btnFindTrailers) btnFindTrailers.addEventListener('click', runBatchSearch);
+
+  // Stop batch
+  const btnStopBatch = document.getElementById('btnStopBatch');
+  btnStopBatch.addEventListener('click', () => {
+    state.stopBatchRequested = true;
+    showNotice('Stopping batch search after current item...');
   });
 
-  // Dropzone File Upload
-  const dropZone = document.getElementById('dropZone');
-  const fileInput = document.getElementById('fileImportInput');
-
-  dropZone.addEventListener('click', () => fileInput.click());
-  dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropZone.classList.add('dragover');
-  });
-  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-  dropZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropZone.classList.remove('dragover');
-    if (e.dataTransfer.files.length) handleFileUpload(e.dataTransfer.files[0]);
-  });
-  fileInput.addEventListener('change', (e) => {
-    if (e.target.files.length) handleFileUpload(e.target.files[0]);
+  // Filter inputs
+  ['movieFilterInput', 'movieFilterInputArtwork', 'movieFilterInputTrailers'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', (e) => {
+        state.filter = e.target.value.toLowerCase();
+        renderCollectionList();
+      });
+    }
   });
 
-  // Workspace Toolbar
-  document.getElementById('btnFetchAll').addEventListener('click', fetchAllMetadata);
-  document.getElementById('btnSelectAll').addEventListener('click', () => setAllSelected(true));
-  document.getElementById('btnUnselectAll').addEventListener('click', () => setAllSelected(false));
-  document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
-  document.getElementById('btnRemoveSelected').addEventListener('click', removeSelected);
+  // Export CSV
+  ['btnExportCSV', 'btnExportCSVArtwork', 'btnExportCSVTrailers'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', exportCSVReport);
+  });
 
-  // Project Backup / Restore
+  // Download ZIP
+  const btnZip = document.getElementById('btnDownloadZipTop');
+  if (btnZip) btnZip.addEventListener('click', downloadArtworkZIP);
+
+  // Modals setup
+  const connModal = document.getElementById('connModal');
+  document.getElementById('btnConnDetails').addEventListener('click', () => {
+    connModal.showModal();
+  });
+  document.getElementById('btnCloseConnModal').addEventListener('click', () => connModal.close());
+  document.getElementById('btnDoneConnModal').addEventListener('click', () => connModal.close());
+
+  // Confirm modal setup
+  document.getElementById('btnCloseConfirmModal').addEventListener('click', closeConfirmModal);
+  document.getElementById('btnCancelConfirmModal').addEventListener('click', closeConfirmModal);
+
+  // Project Save / Load
   document.getElementById('btnSaveProject').addEventListener('click', saveProjectJSON);
-  document.getElementById('btnLoadProject').addEventListener('click', () => {
-    document.getElementById('fileProjectInput').click();
-  });
-  document.getElementById('fileProjectInput').addEventListener('change', loadProjectJSON);
+  const fileProjectInput = document.getElementById('fileProjectInput');
+  document.getElementById('btnOpenProject').addEventListener('click', () => fileProjectInput.click());
+  fileProjectInput.addEventListener('change', loadProjectJSON);
 
-  // Newsletter Controls
-  ['nlTitle', 'nlSubtitle', 'nlHeaderBg', 'nlHeaderTextColor', 'nlAccentColor'].forEach(id => {
-    document.getElementById(id).addEventListener('input', (e) => {
-      const key = id.replace('nl', '').toLowerCase();
-      const mapKey = { title: 'title', subtitle: 'subtitle', headerbg: 'headerBg', headertextcolor: 'headerTextColor', accentcolor: 'accentColor' };
-      state.newsletterConfig[mapKey[key]] = e.target.value;
-      renderNewsletterPreview();
-    });
-  });
-
-  document.getElementById('btnCopyHTML').addEventListener('click', copyNewsletterHTML);
-  document.getElementById('btnDownloadHTML').addEventListener('click', downloadNewsletterHTML);
-
-  // ZIP Export
-  btnDownloadZIP.addEventListener('click', downloadArtworkZIP);
-
-  // Modal Close
-  document.getElementById('modalClose').addEventListener('click', closeModal);
+  // Newsletter Controls Live Sync
+  setupNewsletterSync();
 }
 
-function switchTab(tabName) {
-  const btn = document.querySelector(`.tab-btn[data-tab="${tabName}"]`);
-  if (btn) btn.click();
-}
-
-// Add Movies to State
-function addMoviesToState(movieList) {
-  const newEntries = movieList.map((m, idx) => ({
-    uid: 'm_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-    id: null,
-    title: m.title,
-    year: m.year || '',
-    overview: '',
+// Add Movies to Shared State
+function addMoviesFromParsedList(parsedList) {
+  const newItems = parsedList.map(item => ({
+    uid: 'm_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+    id: item.imdbId || null,
+    title: item.title,
+    year: item.year || '',
+    language: item.language || '',
+    distributor: item.distributor || '',
+    posterUrl: '',
+    trailerUrl: '',
     selectedPoster: null,
     selectedBackdrop: null,
+    selectedLogo: null,
     selectedTrailer: null,
+    keepPoster: false,
+    keepTrailer: false,
+    overview: item.overview || '',
+    featureDuration: item.featureDuration || '',
+    cplPart1Duration: item.cplPart1Duration || '',
+    cplPart2Duration: item.cplPart2Duration || '',
+    firstFrameEndCredits: item.firstFrameEndCredits || '',
+    firstFrameMovingCredits: item.firstFrameMovingCredits || '',
+    cplEntries: item.cplEntries || '',
     images: { poster: [], backdrop: [], logo: [] },
     videos: [],
+    tmdbCandidates: [],
     status: 'pending',
-    selected: false
+    statusText: 'Pending',
+    checked: true
   }));
 
-  state.movies.push(...newEntries);
-  updateWorkspaceUI();
-  // Auto fetch metadata if TMDB is available
-  if (state.status.tmdb) {
-    newEntries.forEach(m => fetchSingleMovieMetadata(m));
+  state.movies.push(...newItems);
+  if (!state.selectedUid && state.movies.length > 0) {
+    state.selectedUid = state.movies[0].uid;
+  }
+
+  updateAllUI();
+  saveLocalState();
+}
+
+// Update All Workspace Views & Counters
+function updateAllUI() {
+  const total = state.movies.length;
+  const artworkCount = state.movies.filter(m => m.selectedPoster || m.posterUrl).length;
+  const trailerCount = state.movies.filter(m => m.selectedTrailer || m.trailerUrl || (m.videos && m.videos.length > 0)).length;
+  const includedInNewsletter = state.movies.filter(m => m.checked !== false).length;
+
+  // Badges
+  document.getElementById('badgeMovieCount').textContent = total;
+  document.getElementById('badgeArtworkCount').textContent = artworkCount;
+  document.getElementById('badgeTrailerCount').textContent = trailerCount;
+
+  // Metrics Strip
+  document.getElementById('metricMovies').textContent = total;
+  document.getElementById('metricArtwork').textContent = artworkCount;
+  document.getElementById('metricTrailers').textContent = trailerCount;
+  document.getElementById('metricNewsletter').textContent = includedInNewsletter;
+
+  renderCollectionList();
+  renderSelectedMovieDetail();
+  renderNewsletterPreview();
+  saveLocalState();
+}
+
+// Render Collection List in Current Active View
+function renderCollectionList() {
+  const containers = [
+    { listId: 'libraryList', countId: 'filterCount', inputId: 'movieFilterInput' },
+    { listId: 'libraryListArtwork', countId: 'filterCountArtwork', inputId: 'movieFilterInputArtwork' },
+    { listId: 'libraryListTrailers', countId: 'filterCountTrailers', inputId: 'movieFilterInputTrailers' }
+  ];
+
+  const filteredMovies = state.movies.filter(m => {
+    if (!state.filter) return true;
+    return m.title.toLowerCase().includes(state.filter) ||
+           (m.year && m.year.includes(state.filter)) ||
+           (m.language && m.language.toLowerCase().includes(state.filter));
+  });
+
+  containers.forEach(({ listId, countId, inputId }) => {
+    const listEl = document.getElementById(listId);
+    const countEl = document.getElementById(countId);
+    const inputEl = document.getElementById(inputId);
+
+    if (inputEl && inputEl.value.toLowerCase() !== state.filter) {
+      inputEl.value = state.filter;
+    }
+
+    if (countEl) countEl.textContent = `${filteredMovies.length} movies`;
+    if (!listEl) return;
+
+    if (state.movies.length === 0) {
+      listEl.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">＋</div>
+          <div class="empty-title">Your collection starts here</div>
+          <div class="empty-desc">Paste a list above or add a movie.</div>
+        </div>
+      `;
+      return;
+    }
+
+    if (filteredMovies.length === 0) {
+      listEl.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-title">No matching movies</div>
+          <div class="empty-desc">Try clearing your filter search.</div>
+        </div>
+      `;
+      return;
+    }
+
+    listEl.innerHTML = '';
+    filteredMovies.forEach(m => {
+      const row = document.createElement('div');
+      row.className = `movie-row ${m.uid === state.selectedUid ? 'active' : ''}`;
+      row.tabIndex = 0;
+      row.role = 'button';
+      row.setAttribute('aria-label', `Select ${m.title}`);
+
+      const posterUrl = m.posterUrl || m.selectedPoster || m.images?.poster?.[0]?.url;
+      const initialLetter = m.title ? m.title.charAt(0).toUpperCase() : 'M';
+
+      const statusClass = m.status === 'found' ? 'found' : m.status === 'loading' ? 'loading' : m.status === 'error' ? 'error' : '';
+
+      row.innerHTML = `
+        <input type="checkbox" class="movie-checkbox" ${m.checked !== false ? 'checked' : ''} aria-label="Include ${m.title} in newsletter and batch actions" />
+        ${posterUrl ? `<img src="${posterUrl}" class="movie-poster-img" alt="${m.title}" />` : `<div class="movie-poster-thumb">${initialLetter}</div>`}
+        <div class="movie-info-block">
+          <div class="movie-row-title">${m.title}</div>
+          <div class="movie-row-meta">${[m.year, m.language].filter(Boolean).join(' · ') || 'Details to discover'}</div>
+        </div>
+        <div class="status-pill-small ${statusClass}">${m.statusText || 'Pending'}</div>
+      `;
+
+      // Checkbox click
+      const chk = row.querySelector('.movie-checkbox');
+      chk.addEventListener('click', (e) => {
+        e.stopPropagation();
+        m.checked = e.target.checked;
+        updateAllUI();
+      });
+
+      // Row select click
+      row.addEventListener('click', () => {
+        state.selectedUid = m.uid;
+        updateAllUI();
+      });
+
+      // Keyboard navigation
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          state.selectedUid = m.uid;
+          updateAllUI();
+        }
+      });
+
+      listEl.appendChild(row);
+    });
+  });
+}
+
+// Render Selected Movie Detail Panel
+function renderSelectedMovieDetail() {
+  const cards = [
+    document.getElementById('movieDetailCard'),
+    document.getElementById('movieDetailCardArtwork'),
+    document.getElementById('movieDetailCardTrailers')
+  ];
+
+  const m = state.movies.find(item => item.uid === state.selectedUid);
+
+  cards.forEach((card, idx) => {
+    if (!card) return;
+
+    if (!m) {
+      card.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">✦</div>
+          <div class="empty-title">A place for your next release</div>
+          <div class="empty-desc">${state.movies.length > 0 ? 'Select a movie from the list to choose artwork and trailers.' : 'Add a movie, then select it here to choose artwork and trailers.'}</div>
+        </div>
+      `;
+      return;
+    }
+
+    const tabType = idx === 0 ? 'library' : idx === 1 ? 'artwork' : 'trailers';
+    card.innerHTML = buildDetailCardHTML(m, tabType);
+    bindDetailCardEvents(card, m);
+  });
+}
+
+// Build Detail Card Markup
+function buildDetailCardHTML(m, tabType) {
+  const matchOptions = (m.tmdbCandidates || []).map(c => `
+    <option value="${c.id}" ${c.id === m.id ? 'selected' : ''}>${c.title} (${c.release_date ? c.release_date.slice(0, 4) : 'N/A'}) · ${c.original_language || 'en'}</option>
+  `).join('');
+
+  const posterUrl = m.posterUrl || m.selectedPoster || m.images?.poster?.[0]?.url || '';
+  const backdropUrl = m.selectedBackdrop || m.images?.backdrop?.[0]?.url || '';
+  const logoUrl = m.selectedLogo || m.images?.logo?.[0]?.url || '';
+
+  const posterSelectOpts = (m.images?.poster || []).map(p => `
+    <option value="${p.url}" ${p.url === posterUrl ? 'selected' : ''}>${p.iso_639_1 || 'orig'} · ${p.width}x${p.height}</option>
+  `).join('');
+
+  const backdropSelectOpts = (m.images?.backdrop || []).map(b => `
+    <option value="${b.url}" ${b.url === backdropUrl ? 'selected' : ''}>${b.iso_639_1 || 'orig'} · ${b.width}x${b.height}</option>
+  `).join('');
+
+  const logoSelectOpts = (m.images?.logo || []).map(l => `
+    <option value="${l.url}" ${l.url === logoUrl ? 'selected' : ''}>${l.iso_639_1 || 'orig'} · ${l.width}x${l.height}</option>
+  `).join('');
+
+  const trailerSelectOpts = (m.videos || []).map(v => `
+    <option value="${v.url}" ${v.url === (m.trailerUrl || m.selectedTrailer) ? 'selected' : ''}>${v.name} · ${v.type} (${v.iso_639_1 || 'en'})</option>
+  `).join('');
+
+  const activeTrailerUrl = m.trailerUrl || m.selectedTrailer || m.videos?.[0]?.url || '';
+  const youtubeVideoId = extractYouTubeID(activeTrailerUrl);
+
+  const tmdbLink = m.id ? `https://www.themoviedb.org/movie/${m.id}` : '#';
+  const imdbLink = m.imdb_id ? `https://www.imdb.com/title/${m.imdb_id}` : '#';
+
+  const languages = ['Tamil', 'Telugu', 'Malayalam', 'Hindi', 'Kannada', 'English', 'Spanish', 'French', 'German', 'Italian', 'Japanese', 'Korean', 'Mandarin', 'Cantonese', 'Arabic', 'Russian'];
+
+  return `
+    <div class="detail-header">
+      <div>
+        <div class="detail-title-row">
+          <h2 class="card-heading">${m.title}</h2>
+          <span class="pill">MOVIE DETAILS</span>
+        </div>
+        <div class="card-subheading">${m.statusText || 'Pending'}</div>
+      </div>
+      <div class="detail-actions-row">
+        <button class="btn btn-primary btn-sm" id="btnSearchSingle">Search this movie</button>
+        <button class="btn btn-secondary btn-sm" id="btnMoveUp" title="Move up">↑</button>
+        <button class="btn btn-secondary btn-sm" id="btnMoveDown" title="Move down">↓</button>
+        <button class="btn btn-danger btn-sm" id="btnRemoveMovie">Remove</button>
+      </div>
+    </div>
+
+    ${m.tmdbCandidates && m.tmdbCandidates.length > 0 ? `
+      <div class="form-group" style="margin-bottom: 12px;">
+        <label class="form-label" for="selectMovieMatch">Movie match</label>
+        <select id="selectMovieMatch" class="form-select">${matchOptions}</select>
+      </div>
+    ` : ''}
+
+    <div class="form-group" style="margin-bottom: 16px;">
+      <label class="form-label" for="selectLanguage">Preferred artwork and trailer language</label>
+      <select id="selectLanguage" class="form-select">
+        <option value="">Automatic / original</option>
+        ${languages.map(l => `<option value="${l}" ${langCode(l) === langCode(m.language) ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>
+    </div>
+
+    <!-- ARTWORK GRID -->
+    <div class="artwork-3col-grid">
+      <div class="art-slot">
+        <div class="art-slot-label">Poster</div>
+        <div class="art-slot-preview">
+          ${posterUrl ? `<img src="${posterUrl}" alt="Poster" />` : '—'}
+        </div>
+        <select id="selectPoster" class="form-select form-select-sm">
+          ${posterSelectOpts || '<option>No artwork found</option>'}
+        </select>
+        ${posterUrl ? `<a href="${posterUrl}" target="_blank" class="art-slot-link">Open full size ↗</a>` : ''}
+      </div>
+
+      <div class="art-slot">
+        <div class="art-slot-label">Backdrop</div>
+        <div class="art-slot-preview">
+          ${backdropUrl ? `<img src="${backdropUrl}" alt="Backdrop" />` : '—'}
+        </div>
+        <select id="selectBackdrop" class="form-select form-select-sm">
+          ${backdropSelectOpts || '<option>No artwork found</option>'}
+        </select>
+        ${backdropUrl ? `<a href="${backdropUrl}" target="_blank" class="art-slot-link">Open full size ↗</a>` : ''}
+      </div>
+
+      <div class="art-slot">
+        <div class="art-slot-label">Logo</div>
+        <div class="art-slot-preview">
+          ${logoUrl ? `<img src="${logoUrl}" alt="Logo" />` : '—'}
+        </div>
+        <select id="selectLogo" class="form-select form-select-sm">
+          ${logoSelectOpts || '<option>No artwork found</option>'}
+        </select>
+        ${logoUrl ? `<a href="${logoUrl}" target="_blank" class="art-slot-link">Open full size ↗</a>` : ''}
+      </div>
+    </div>
+
+    <div style="display:flex; gap:12px; margin-bottom:14px; font-size:12px;">
+      ${m.id ? `<a href="${tmdbLink}" target="_blank" style="color:var(--primary-green); text-decoration:none;">TMDB ↗</a>` : ''}
+      ${m.imdb_id ? `<a href="${imdbLink}" target="_blank" style="color:var(--primary-green); text-decoration:none;">IMDb ↗</a>` : ''}
+    </div>
+
+    <!-- FORM EDITING GRID -->
+    <div class="form-grid-2col">
+      <div class="form-group full-width">
+        <label class="form-label" for="inputMovieTitle">Movie title</label>
+        <input type="text" id="inputMovieTitle" class="form-input" value="${escapeHTML(m.title)}">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="inputYear">Year</label>
+        <input type="text" id="inputYear" class="form-input" value="${escapeHTML(m.year)}">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="inputLanguage">Language</label>
+        <input type="text" id="inputLanguage" class="form-input" value="${escapeHTML(m.language)}">
+      </div>
+
+      <div class="form-group full-width">
+        <label class="form-label" for="inputDistributor">Distributor</label>
+        <input type="text" id="inputDistributor" class="form-input" value="${escapeHTML(m.distributor)}">
+      </div>
+
+      <div class="form-group full-width">
+        <label class="form-label" for="inputPosterUrl">Poster URL</label>
+        <input type="text" id="inputPosterUrl" class="form-input" value="${escapeHTML(posterUrl)}">
+      </div>
+
+      <div class="form-group full-width" style="display:flex; justify-content:space-between; align-items:center;">
+        <label class="checkbox-label">
+          <input type="checkbox" id="chkKeepPoster" ${m.keepPoster ? 'checked' : ''}>
+          Keep my poster when searching
+        </label>
+        <button class="btn btn-secondary btn-sm" id="btnUploadPoster">Upload a poster</button>
+        <input type="file" id="filePosterInput" accept="image/*" style="display:none;">
+      </div>
+
+      <!-- TRAILER SECTION -->
+      <div class="mini-heading">TRAILER & TEASER</div>
+
+      <div class="form-group full-width">
+        <label class="form-label" for="selectTrailer">Video alternatives</label>
+        <select id="selectTrailer" class="form-select">${trailerSelectOpts || '<option value="">No trailers found</option>'}</select>
+      </div>
+
+      <div class="form-group full-width">
+        <label class="form-label" for="inputTrailerUrl">Trailer link / YouTube video ID</label>
+        <input type="text" id="inputTrailerUrl" class="form-input" value="${escapeHTML(activeTrailerUrl)}">
+      </div>
+
+      <div class="form-group full-width" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <label class="checkbox-label">
+          <input type="checkbox" id="chkKeepTrailer" ${m.keepTrailer ? 'checked' : ''}>
+          Keep my trailer when searching
+        </label>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-secondary btn-sm" id="btnUsePastedTrailer">Use pasted link</button>
+          <button class="btn btn-secondary btn-sm" id="btnSearchYouTube">Search YouTube API</button>
+          ${activeTrailerUrl ? `<a href="${activeTrailerUrl}" target="_blank" class="btn btn-secondary btn-sm">Watch ↗</a>` : ''}
+        </div>
+      </div>
+
+      ${youtubeVideoId ? `
+        <div class="form-group full-width">
+          <div class="iframe-preview-wrap">
+            <iframe src="https://www.youtube-nocookie.com/embed/${youtubeVideoId}" title="YouTube Video Preview" allowfullscreen></iframe>
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- NEWSLETTER & TECHNICAL DETAILS -->
+      <div class="mini-heading">NEWSLETTER & TECHNICAL DETAILS</div>
+
+      <div class="form-group full-width">
+        <label class="form-label" for="inputSynopsis">Synopsis</label>
+        <textarea id="inputSynopsis" class="form-textarea" rows="3">${escapeHTML(m.overview)}</textarea>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="inputFeatureDuration">Feature duration</label>
+        <input type="text" id="inputFeatureDuration" class="form-input" value="${escapeHTML(m.featureDuration)}" placeholder="e.g. 02:45:00">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="inputCplPart1">CPL Part 1 duration</label>
+        <input type="text" id="inputCplPart1" class="form-input" value="${escapeHTML(m.cplPart1Duration)}" placeholder="e.g. 01:20:00">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="inputCplPart2">CPL Part 2 duration</label>
+        <input type="text" id="inputCplPart2" class="form-input" value="${escapeHTML(m.cplPart2Duration)}" placeholder="e.g. 01:25:00">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="inputFirstFrameEnd">First frame end credits</label>
+        <input type="text" id="inputFirstFrameEnd" class="form-input" value="${escapeHTML(m.firstFrameEndCredits)}" placeholder="e.g. 02:38:00">
+      </div>
+
+      <div class="form-group full-width">
+        <label class="form-label" for="inputFirstFrameMoving">First frame moving credits</label>
+        <input type="text" id="inputFirstFrameMoving" class="form-input" value="${escapeHTML(m.firstFrameMovingCredits)}" placeholder="e.g. 02:42:00">
+      </div>
+
+      <div class="form-group full-width">
+        <label class="form-label" for="inputCplEntries">CPL entries · one per line: part | name | duration</label>
+        <textarea id="inputCplEntries" class="form-textarea" rows="3" placeholder="1 | VIKRAM_PART1 | 01:20:00&#10;2 | VIKRAM_PART2 | 01:25:00">${escapeHTML(m.cplEntries)}</textarea>
+      </div>
+
+      <div class="form-group full-width" style="margin-top: 10px;">
+        <button class="btn btn-primary btn-full" id="btnApplyMovieChanges">Apply changes</button>
+      </div>
+    </div>
+  `;
+}
+
+// Bind Detail Card Interactive Events
+function bindDetailCardEvents(card, m) {
+  // Reorder / remove
+  const btnUp = card.querySelector('#btnMoveUp');
+  const btnDown = card.querySelector('#btnMoveDown');
+  const btnRemove = card.querySelector('#btnRemoveMovie');
+
+  if (btnUp) btnUp.addEventListener('click', () => moveMovieOrder(m.uid, -1));
+  if (btnDown) btnDown.addEventListener('click', () => moveMovieOrder(m.uid, 1));
+  if (btnRemove) btnRemove.addEventListener('click', () => promptRemoveMovie(m));
+
+  // Search single
+  const btnSearchSingle = card.querySelector('#btnSearchSingle');
+  if (btnSearchSingle) btnSearchSingle.addEventListener('click', () => fetchMovieMetadata(m));
+
+  // Match select
+  const selectMatch = card.querySelector('#selectMovieMatch');
+  if (selectMatch) {
+    selectMatch.addEventListener('change', async (e) => {
+      const matchId = e.target.value;
+      if (matchId) await loadMovieDetailFromTMDB(m, matchId);
+    });
+  }
+
+  // Artwork selects
+  const selPoster = card.querySelector('#selectPoster');
+  const selBackdrop = card.querySelector('#selectBackdrop');
+  const selLogo = card.querySelector('#selectLogo');
+
+  if (selPoster) selPoster.addEventListener('change', (e) => { m.selectedPoster = e.target.value; updateAllUI(); });
+  if (selBackdrop) selBackdrop.addEventListener('change', (e) => { m.selectedBackdrop = e.target.value; updateAllUI(); });
+  if (selLogo) selLogo.addEventListener('change', (e) => { m.selectedLogo = e.target.value; updateAllUI(); });
+
+  // Upload poster
+  const btnUploadPoster = card.querySelector('#btnUploadPoster');
+  const filePosterInput = card.querySelector('#filePosterInput');
+  if (btnUploadPoster && filePosterInput) {
+    btnUploadPoster.addEventListener('click', () => filePosterInput.click());
+    filePosterInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          m.posterUrl = evt.target.result;
+          m.selectedPoster = evt.target.result;
+          showNotice('Custom poster uploaded and selected.');
+          updateAllUI();
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+  }
+
+  // Video select
+  const selTrailer = card.querySelector('#selectTrailer');
+  if (selTrailer) {
+    selTrailer.addEventListener('change', (e) => {
+      m.selectedTrailer = e.target.value;
+      m.trailerUrl = e.target.value;
+      updateAllUI();
+    });
+  }
+
+  // Use pasted link button
+  const btnPastedTrailer = card.querySelector('#btnUsePastedTrailer');
+  const inputTrailerUrl = card.querySelector('#inputTrailerUrl');
+  if (btnPastedTrailer && inputTrailerUrl) {
+    btnPastedTrailer.addEventListener('click', () => {
+      m.trailerUrl = inputTrailerUrl.value.trim();
+      m.selectedTrailer = inputTrailerUrl.value.trim();
+      showNotice('Pasted trailer link applied.');
+      updateAllUI();
+    });
+  }
+
+  // Search YouTube API button
+  const btnYouTube = card.querySelector('#btnSearchYouTube');
+  if (btnYouTube) {
+    btnYouTube.addEventListener('click', async () => {
+      if (!state.status.youtube) {
+        showNotice('YouTube API key is missing. Set YOUTUBE_API_KEY to search.', 'error');
+        return;
+      }
+      showNotice(`Searching YouTube for ${m.title}...`);
+      try {
+        const res = await fetch(`/api/youtube?q=${encodeURIComponent(m.title)}`);
+        const data = await res.json();
+        if (data.videos && data.videos.length > 0) {
+          m.videos.push(...data.videos);
+          m.selectedTrailer = data.videos[0].url;
+          m.trailerUrl = data.videos[0].url;
+          showNotice(`Found ${data.videos.length} trailer alternative(s) on YouTube.`);
+          updateAllUI();
+        } else {
+          showNotice('No YouTube trailers found.', 'error');
+        }
+      } catch {
+        showNotice('YouTube search failed.', 'error');
+      }
+    });
+  }
+
+  // Apply Changes button
+  const btnApply = card.querySelector('#btnApplyMovieChanges');
+  if (btnApply) {
+    btnApply.addEventListener('click', () => {
+      m.title = card.querySelector('#inputMovieTitle').value.trim() || m.title;
+      m.year = card.querySelector('#inputYear').value.trim();
+      m.language = card.querySelector('#inputLanguage').value.trim();
+      m.distributor = card.querySelector('#inputDistributor').value.trim();
+      m.posterUrl = card.querySelector('#inputPosterUrl').value.trim();
+
+      const keepPosterChk = card.querySelector('#chkKeepPoster');
+      if (keepPosterChk) m.keepPoster = keepPosterChk.checked;
+
+      const keepTrailerChk = card.querySelector('#chkKeepTrailer');
+      if (keepTrailerChk) m.keepTrailer = keepTrailerChk.checked;
+
+      m.overview = card.querySelector('#inputSynopsis').value.trim();
+      m.featureDuration = card.querySelector('#inputFeatureDuration').value.trim();
+      m.cplPart1Duration = card.querySelector('#inputCplPart1').value.trim();
+      m.cplPart2Duration = card.querySelector('#inputCplPart2').value.trim();
+      m.firstFrameEndCredits = card.querySelector('#inputFirstFrameEnd').value.trim();
+      m.firstFrameMovingCredits = card.querySelector('#inputFirstFrameMoving').value.trim();
+      m.cplEntries = card.querySelector('#inputCplEntries').value.trim();
+
+      showNotice('Movie details updated across your workspace.');
+      updateAllUI();
+    });
   }
 }
 
-// Load Curated Demo Movies
-function loadDemoMovies() {
-  const demoList = [
-    { title: 'Dune: Part Two', year: '2024' },
-    { title: 'Oppenheimer', year: '2023' },
-    { title: 'Spider-Man: Across the Spider-Verse', year: '2023' },
-    { title: 'Interstellar', year: '2014' },
-    { title: 'Everything Everywhere All at Once', year: '2022' }
-  ];
-  addMoviesToState(demoList);
-  switchTab('workspace');
+// Fetch Movie Metadata for Single Movie
+async function fetchMovieMetadata(m) {
+  if (!state.status.tmdb) {
+    m.status = 'error';
+    m.statusText = 'No TMDB key';
+    updateAllUI();
+    return false;
+  }
+
+  m.status = 'loading';
+  m.statusText = 'Searching…';
+  updateAllUI();
+
+  try {
+    const searchUrl = `/api/search?q=${encodeURIComponent(m.title)}${m.year ? `&year=${m.year}` : ''}${m.language ? `&language=${m.language}` : ''}`;
+    const searchRes = await fetch(searchUrl);
+    const searchData = await searchRes.json();
+
+    if (!searchData.results || searchData.results.length === 0) {
+      m.status = 'error';
+      m.statusText = 'No match · edit title';
+      updateAllUI();
+      return false;
+    }
+
+    m.tmdbCandidates = searchData.results;
+    const match = searchData.results[0];
+    await loadMovieDetailFromTMDB(m, match.id);
+    return true;
+  } catch {
+    m.status = 'error';
+    m.statusText = 'Search failed';
+    updateAllUI();
+    return false;
+  }
 }
 
-// File Upload Handler (.txt, .csv, .pdf)
-async function handleFileUpload(file) {
-  const statusEl = document.getElementById('fileUploadStatus');
-  statusEl.textContent = `Processing ${file.name}...`;
+// Load Movie Detail by TMDB ID
+async function loadMovieDetailFromTMDB(m, tmdbId) {
+  m.status = 'loading';
+  m.statusText = 'Loading details…';
+  updateAllUI();
+
+  try {
+    const detailUrl = `/api/movie/${tmdbId}${m.language ? `?language=${m.language}` : ''}`;
+    const res = await fetch(detailUrl);
+    const data = await res.json();
+
+    m.id = data.movie.id;
+    m.imdb_id = data.movie.imdb_id;
+    m.overview = data.movie.overview || m.overview || '';
+    m.images = data.images || { poster: [], backdrop: [], logo: [] };
+    m.videos = data.videos || [];
+
+    if (!m.keepPoster) {
+      m.selectedPoster = m.images.poster?.[0]?.url || null;
+      m.selectedBackdrop = m.images.backdrop?.[0]?.url || null;
+      m.selectedLogo = m.images.logo?.[0]?.url || null;
+    }
+
+    if (!m.keepTrailer) {
+      m.selectedTrailer = m.videos?.[0]?.url || null;
+      m.trailerUrl = m.selectedTrailer;
+    }
+
+    m.status = 'found';
+    m.statusText = 'Matched · review choices';
+  } catch {
+    m.status = 'error';
+    m.statusText = 'Details failed';
+  }
+
+  updateAllUI();
+}
+
+// Run Sequential Batch Search
+async function runBatchSearch() {
+  const checkedMovies = state.movies.filter(m => m.checked !== false);
+  if (checkedMovies.length === 0) {
+    showNotice('No movies selected for batch search.', 'error');
+    return;
+  }
+
+  if (!state.status.tmdb) {
+    showNotice('TMDB_API_KEY is not configured in environment. Enable API key to search.', 'error');
+    return;
+  }
+
+  state.batchRunning = true;
+  state.stopBatchRequested = false;
+  const btnStop = document.getElementById('btnStopBatch');
+  if (btnStop) btnStop.classList.remove('hidden');
+
+  let processed = 0;
+  let failed = 0;
+
+  for (let i = 0; i < checkedMovies.length; i++) {
+    if (state.stopBatchRequested) {
+      showNotice(`Batch search stopped after item ${i}.`);
+      break;
+    }
+
+    const m = checkedMovies[i];
+    showNotice(`Searching ${i + 1} of ${checkedMovies.length}: ${m.title}`);
+    
+    const success = await fetchMovieMetadata(m);
+    if (success) processed++; else failed++;
+  }
+
+  state.batchRunning = false;
+  if (btnStop) btnStop.classList.add('hidden');
+  showNotice(`Search finished: ${processed} processed, ${failed} failed.`);
+}
+
+// Reorder Movie
+function moveMovieOrder(uid, delta) {
+  const idx = state.movies.findIndex(m => m.uid === uid);
+  if (idx < 0) return;
+
+  const targetIdx = idx + delta;
+  if (targetIdx < 0 || targetIdx >= state.movies.length) return;
+
+  const temp = state.movies[idx];
+  state.movies[idx] = state.movies[targetIdx];
+  state.movies[targetIdx] = temp;
+
+  updateAllUI();
+}
+
+// Prompt Remove Movie Modal
+function promptRemoveMovie(m) {
+  const modal = document.getElementById('confirmModal');
+  const msg = document.getElementById('confirmModalMessage');
+  msg.textContent = `Are you sure you want to remove "${m.title}" from your library?`;
+
+  const btnAccept = document.getElementById('btnAcceptConfirmModal');
+  const onAccept = () => {
+    state.movies = state.movies.filter(item => item.uid !== m.uid);
+    if (state.selectedUid === m.uid) {
+      state.selectedUid = state.movies[0]?.uid || null;
+    }
+    closeConfirmModal();
+    btnAccept.removeEventListener('click', onAccept);
+    showNotice(`Removed "${m.title}".`);
+    updateAllUI();
+  };
+
+  btnAccept.addEventListener('click', onAccept);
+  modal.showModal();
+}
+
+function closeConfirmModal() {
+  const modal = document.getElementById('confirmModal');
+  modal.close();
+}
+
+// File Import Handler (.txt, .csv, .pdf)
+async function handleFileImport(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  if (file.size > 10 * 1024 * 1024) {
+    showNotice('File exceeds 10 MB limit.', 'error');
+    return;
+  }
+
+  showNotice(`Reading file "${file.name}"...`);
 
   try {
     let text = '';
     if (file.name.endsWith('.pdf')) {
-      const arrayBuffer = await file.arrayBuffer();
+      const buffer = await file.arrayBuffer();
       const res = await fetch('/api/pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/pdf' },
-        body: arrayBuffer
+        body: buffer
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to read PDF file.');
+      if (!res.ok) throw new Error(data.error || 'Failed to extract text from PDF.');
       text = data.text;
     } else {
       text = await file.text();
     }
 
     const parsed = parseMovieListText(text);
-    if (parsed.length === 0) throw new Error('No movie titles found in file.');
-
-    addMoviesToState(parsed);
-    statusEl.textContent = `Successfully imported ${parsed.length} movies!`;
-    switchTab('workspace');
+    if (parsed.length > 0) {
+      addMoviesFromParsedList(parsed);
+      showNotice(`Successfully imported ${parsed.length} titles from ${file.name}.`);
+    } else {
+      showNotice('No valid titles found in imported file.', 'error');
+    }
   } catch (err) {
-    statusEl.textContent = `Error: ${err.message}`;
+    showNotice(`Import Error: ${err.message}`, 'error');
   }
 }
 
-// Fetch Metadata for single movie
-async function fetchSingleMovieMetadata(movie) {
-  movie.status = 'loading';
-  updateMovieCard(movie);
+// Newsletter Sync Setup
+function setupNewsletterSync() {
+  const fields = ['nlTitle', 'nlIntro', 'nlTopBannerUrl', 'nlTopBannerLink', 'nlSecondBannerUrl', 'nlSecondBannerLink', 'nlFooterText'];
 
-  try {
-    // Search
-    const searchRes = await fetch(`/api/search?q=${encodeURIComponent(movie.title)}&year=${movie.year}`);
-    const searchData = await searchRes.json();
+  fields.forEach(id => {
+    const input = document.getElementById(id);
+    if (input) {
+      input.addEventListener('input', () => {
+        state.newsletter.title = document.getElementById('nlTitle').value;
+        state.newsletter.intro = document.getElementById('nlIntro').value;
+        state.newsletter.topBannerUrl = document.getElementById('nlTopBannerUrl').value;
+        state.newsletter.topBannerLink = document.getElementById('nlTopBannerLink').value;
+        state.newsletter.secondBannerUrl = document.getElementById('nlSecondBannerUrl').value;
+        state.newsletter.secondBannerLink = document.getElementById('nlSecondBannerLink').value;
+        state.newsletter.footer = document.getElementById('nlFooterText').value;
 
-    if (!searchData.results || searchData.results.length === 0) {
-      movie.status = 'not_found';
-      updateMovieCard(movie);
-      return;
-    }
-
-    const match = searchData.results[0];
-    movie.id = match.id;
-    movie.title = match.title;
-    movie.year = match.release_date ? match.release_date.slice(0, 4) : movie.year;
-
-    // Detail
-    const detailRes = await fetch(`/api/movie/${match.id}`);
-    const detailData = await detailRes.json();
-
-    movie.overview = detailData.movie?.overview || match.overview || '';
-    movie.images = detailData.images || { poster: [], backdrop: [], logo: [] };
-    movie.videos = detailData.videos || [];
-
-    movie.selectedPoster = movie.images.poster?.[0]?.url || null;
-    movie.selectedBackdrop = movie.images.backdrop?.[0]?.url || null;
-    movie.selectedTrailer = movie.videos?.[0]?.url || null;
-
-    movie.status = 'found';
-  } catch {
-    movie.status = 'error';
-  }
-
-  updateMovieCard(movie);
-}
-
-// Fetch metadata for all pending movies
-function fetchAllMetadata() {
-  state.movies.forEach(m => {
-    if (m.status !== 'found') fetchSingleMovieMetadata(m);
-  });
-}
-
-// Update Workspace UI
-function updateWorkspaceUI() {
-  movieCount.textContent = state.movies.length;
-  
-  const selected = state.movies.filter(m => m.selected).length;
-  selectedCount.textContent = `${selected} of ${state.movies.length} selected`;
-
-  if (state.movies.length === 0) {
-    movieGrid.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-icon">🎬</div>
-        <h3>No movies in workspace yet</h3>
-        <p>Paste movie titles in the Import tab or click <strong>Load Demo</strong> above to get started.</p>
-      </div>
-    `;
-    return;
-  }
-
-  movieGrid.innerHTML = '';
-  state.movies.forEach((m, index) => {
-    const card = createMovieCardElement(m, index);
-    movieGrid.appendChild(card);
-  });
-}
-
-// Create Card DOM Element
-function createMovieCardElement(m, index) {
-  const card = document.createElement('div');
-  card.className = `movie-card ${m.selected ? 'selected' : ''}`;
-  card.dataset.uid = m.uid;
-
-  const posterUrl = m.selectedPoster || m.images?.poster?.[0]?.url;
-  const backdropUrl = m.selectedBackdrop || m.images?.backdrop?.[0]?.url;
-
-  card.innerHTML = `
-    <input type="checkbox" class="card-select-checkbox" ${m.selected ? 'checked' : ''} />
-    <div class="poster-wrapper">
-      ${backdropUrl ? `<img src="${backdropUrl}" class="poster-backdrop" alt="backdrop" />` : ''}
-      ${posterUrl ? `<img src="${posterUrl}" class="poster-img" alt="${m.title}" />` : `
-        <div class="poster-placeholder">
-          <span style="font-size: 2rem;">🎬</span>
-          <span style="font-size: 0.75rem;">${m.status === 'loading' ? 'Fetching...' : 'No Artwork'}</span>
-        </div>
-      `}
-    </div>
-    <div class="movie-content">
-      <div class="movie-title">${m.title}</div>
-      <div class="movie-meta">
-        <span>${m.year || 'N/A'}</span>
-        <span class="badge ${m.status === 'found' ? 'badge-success' : m.status === 'loading' ? 'badge-warning' : 'badge-danger'}">
-          ${m.status === 'found' ? 'Found' : m.status === 'loading' ? 'Loading...' : m.status === 'not_found' ? 'Not Found' : 'Pending'}
-        </span>
-      </div>
-      <p class="movie-overview">${m.overview || 'No overview text available. Click search to refine or update.'}</p>
-      <div class="movie-card-footer">
-        <div style="display: flex; gap: 0.25rem;">
-          <button class="btn btn-secondary btn-sm btn-art" title="Pick Artwork">🖼️ Artwork</button>
-          <button class="btn btn-secondary btn-sm btn-search" title="Search / Match">🔍 Refine</button>
-        </div>
-        <div style="display: flex; gap: 0.25rem;">
-          <button class="btn btn-ghost btn-sm btn-up" title="Move Up">⬆️</button>
-          <button class="btn btn-ghost btn-sm btn-down" title="Move Down">⬇️</button>
-          <button class="btn btn-ghost btn-sm btn-del" title="Delete">🗑️</button>
-        </div>
-      </div>
-    </div>
-  `;
-
-  // Bind Events
-  const checkbox = card.querySelector('.card-select-checkbox');
-  checkbox.addEventListener('change', (e) => {
-    m.selected = e.target.checked;
-    card.classList.toggle('selected', m.selected);
-    const selected = state.movies.filter(x => x.selected).length;
-    selectedCount.textContent = `${selected} of ${state.movies.length} selected`;
-  });
-
-  card.querySelector('.btn-art').addEventListener('click', () => openArtworkModal(m));
-  card.querySelector('.btn-search').addEventListener('click', () => openSearchModal(m));
-  card.querySelector('.btn-del').addEventListener('click', () => {
-    state.movies = state.movies.filter(x => x.uid !== m.uid);
-    updateWorkspaceUI();
-  });
-  card.querySelector('.btn-up').addEventListener('click', () => {
-    if (index > 0) {
-      const temp = state.movies[index];
-      state.movies[index] = state.movies[index - 1];
-      state.movies[index - 1] = temp;
-      updateWorkspaceUI();
-    }
-  });
-  card.querySelector('.btn-down').addEventListener('click', () => {
-    if (index < state.movies.length - 1) {
-      const temp = state.movies[index];
-      state.movies[index] = state.movies[index + 1];
-      state.movies[index + 1] = temp;
-      updateWorkspaceUI();
-    }
-  });
-
-  return card;
-}
-
-function updateMovieCard(movie) {
-  const existing = document.querySelector(`.movie-card[data-uid="${movie.uid}"]`);
-  if (existing) {
-    const parent = existing.parentElement;
-    const index = state.movies.findIndex(m => m.uid === movie.uid);
-    if (index !== -1) {
-      const newCard = createMovieCardElement(movie, index);
-      parent.replaceChild(newCard, existing);
-    }
-  }
-}
-
-// Select All / Deselect All
-function setAllSelected(selected) {
-  state.movies.forEach(m => m.selected = selected);
-  updateWorkspaceUI();
-}
-
-function removeSelected() {
-  state.movies = state.movies.filter(m => !m.selected);
-  updateWorkspaceUI();
-}
-
-// Artwork Picker Modal
-function openArtworkModal(movie) {
-  const modal = document.getElementById('movieModal');
-  const modalTitle = document.getElementById('modalTitle');
-  const modalBody = document.getElementById('modalBody');
-
-  modalTitle.textContent = `Select Artwork for ${movie.title}`;
-
-  const posters = movie.images?.poster || [];
-  const backdrops = movie.images?.backdrop || [];
-
-  modalBody.innerHTML = `
-    <h4>Posters (${posters.length})</h4>
-    <div class="gallery-grid">
-      ${posters.length ? posters.map((p, i) => `
-        <div class="gallery-thumb ${movie.selectedPoster === p.url ? 'selected' : ''}" data-type="poster" data-url="${p.url}">
-          <img src="${p.url}" alt="poster ${i}" />
-        </div>
-      `).join('') : '<p style="color:var(--text-muted); font-size:0.85rem;">No posters available</p>'}
-    </div>
-
-    <h4 style="margin-top: 1.5rem;">Backdrops (${backdrops.length})</h4>
-    <div class="gallery-grid">
-      ${backdrops.length ? backdrops.map((b, i) => `
-        <div class="gallery-thumb ${movie.selectedBackdrop === b.url ? 'selected' : ''}" data-type="backdrop" data-url="${b.url}">
-          <img src="${b.url}" alt="backdrop ${i}" style="height: 90px; object-fit: cover;" />
-        </div>
-      `).join('') : '<p style="color:var(--text-muted); font-size:0.85rem;">No backdrops available</p>'}
-    </div>
-  `;
-
-  modalBody.querySelectorAll('.gallery-thumb').forEach(thumb => {
-    thumb.addEventListener('click', () => {
-      const type = thumb.dataset.type;
-      const url = thumb.dataset.url;
-      if (type === 'poster') movie.selectedPoster = url;
-      if (type === 'backdrop') movie.selectedBackdrop = url;
-      updateMovieCard(movie);
-      openArtworkModal(movie); // Re-render gallery selection
-    });
-  });
-
-  modal.classList.remove('hidden');
-}
-
-// Search / Refine Modal
-function openSearchModal(movie) {
-  const modal = document.getElementById('movieModal');
-  const modalTitle = document.getElementById('modalTitle');
-  const modalBody = document.getElementById('modalBody');
-
-  modalTitle.textContent = `Refine Match: ${movie.title}`;
-
-  modalBody.innerHTML = `
-    <div class="form-group" style="display: flex; gap: 0.5rem;">
-      <input type="text" id="modalSearchQuery" value="${movie.title}" placeholder="Search title or IMDb ID (tt1234567)" style="flex: 1;" />
-      <button id="btnModalSearch" class="btn btn-primary">Search TMDB</button>
-    </div>
-    <div id="modalSearchResults" style="margin-top: 1rem;">
-      <p style="color:var(--text-muted); font-size:0.85rem;">Click search to query TMDB.</p>
-    </div>
-  `;
-
-  document.getElementById('btnModalSearch').addEventListener('click', async () => {
-    const q = document.getElementById('modalSearchQuery').value.trim();
-    const resultsContainer = document.getElementById('modalSearchResults');
-    resultsContainer.innerHTML = '<p style="color:var(--text-muted);">Searching...</p>';
-
-    try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-      const data = await res.json();
-      if (!data.results || data.results.length === 0) {
-        resultsContainer.innerHTML = '<p style="color:var(--danger);">No results found.</p>';
-        return;
-      }
-
-      resultsContainer.innerHTML = data.results.map(r => `
-        <div style="display: flex; gap: 1rem; padding: 0.75rem; border-bottom: 1px solid var(--border-color); align-items: center;">
-          <img src="${r.poster_path ? 'https://image.tmdb.org/t/p/w92' + r.poster_path : 'https://via.placeholder.com/60x90'}" style="width: 50px; border-radius: 4px;" />
-          <div style="flex: 1;">
-            <strong>${r.title}</strong> (${r.release_date ? r.release_date.slice(0, 4) : 'N/A'})
-            <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">${r.overview ? r.overview.slice(0, 100) + '...' : ''}</p>
-          </div>
-          <button class="btn btn-secondary btn-sm btn-select-match" data-id="${r.id}">Select</button>
-        </div>
-      `).join('');
-
-      resultsContainer.querySelectorAll('.btn-select-match').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const id = btn.dataset.id;
-          movie.id = id;
-          movie.status = 'loading';
-          updateMovieCard(movie);
-          closeModal();
-
-          const detailRes = await fetch(`/api/movie/${id}`);
-          const detailData = await detailRes.json();
-
-          movie.title = detailData.movie.title;
-          movie.year = detailData.movie.year;
-          movie.overview = detailData.movie.overview;
-          movie.images = detailData.images;
-          movie.videos = detailData.videos;
-
-          movie.selectedPoster = movie.images.poster?.[0]?.url || null;
-          movie.selectedBackdrop = movie.images.backdrop?.[0]?.url || null;
-          movie.selectedTrailer = movie.videos?.[0]?.url || null;
-          movie.status = 'found';
-
-          updateMovieCard(movie);
-        });
+        renderNewsletterPreview();
+        saveLocalState();
       });
-    } catch {
-      resultsContainer.innerHTML = '<p style="color:var(--danger);">Failed to search TMDB.</p>';
     }
   });
 
-  modal.classList.remove('hidden');
+  // Top Banner Upload
+  setupImageUpload('btnUploadTopBanner', 'fileTopBannerInput', (url) => {
+    document.getElementById('nlTopBannerUrl').value = url;
+    state.newsletter.topBannerUrl = url;
+    renderNewsletterPreview();
+  });
+
+  // Second Banner Upload
+  setupImageUpload('btnUploadSecondBanner', 'fileSecondBannerInput', (url) => {
+    document.getElementById('nlSecondBannerUrl').value = url;
+    state.newsletter.secondBannerUrl = url;
+    renderNewsletterPreview();
+  });
+
+  // Export Buttons
+  document.getElementById('btnExportHTML').addEventListener('click', () => exportNewsletterHTML(false));
+  document.getElementById('btnExportEmbeddedHTML').addEventListener('click', () => exportNewsletterHTML(true));
 }
 
-function closeModal() {
-  document.getElementById('movieModal').classList.add('hidden');
+function setupImageUpload(btnId, fileInputId, callback) {
+  const btn = document.getElementById(btnId);
+  const fileInput = document.getElementById(fileInputId);
+  if (btn && fileInput) {
+    btn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (evt) => callback(evt.target.result);
+        reader.readAsDataURL(file);
+      }
+    });
+  }
 }
 
-// Newsletter Preview Renderer
+// Render Newsletter Live Preview
 function renderNewsletterPreview() {
-  const html = generateNewsletterHTML(state.movies, state.newsletterConfig);
-  const doc = newsletterPreview.contentDocument || newsletterPreview.contentWindow.document;
+  const iframe = document.getElementById('nlIframePreview');
+  if (!iframe) return;
+
+  const html = generateNewsletterHTML(state.movies, state.newsletter);
+  const doc = iframe.contentDocument || iframe.contentWindow.document;
   doc.open();
   doc.write(html);
   doc.close();
 }
 
-function copyNewsletterHTML() {
-  const html = generateNewsletterHTML(state.movies, state.newsletterConfig);
-  navigator.clipboard.writeText(html).then(() => {
-    alert('Newsletter HTML copied to clipboard!');
-  });
-}
+// Export Newsletter HTML File
+async function exportNewsletterHTML(embedImages = false) {
+  let moviesToExport = state.movies;
 
-function downloadNewsletterHTML() {
-  const html = generateNewsletterHTML(state.movies, state.newsletterConfig);
+  if (embedImages) {
+    showNotice('Embedding TMDB images for offline export...');
+    moviesToExport = await Promise.all(state.movies.map(async (m) => {
+      const copy = { ...m };
+      const poster = m.selectedPoster || m.images?.poster?.[0]?.url;
+      if (poster && poster.startsWith('https://image.tmdb.org')) {
+        try {
+          const res = await fetch('/api/embed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: poster })
+          });
+          const data = await res.json();
+          if (data.url) copy.selectedPoster = data.url;
+        } catch {
+          // fallback to remote
+        }
+      }
+      return copy;
+    }));
+  }
+
+  const html = generateNewsletterHTML(moviesToExport, state.newsletter);
   const blob = new Blob([html], { type: 'text/html' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -545,43 +1080,25 @@ function downloadNewsletterHTML() {
   a.download = 'movie-newsletter.html';
   a.click();
   URL.revokeObjectURL(url);
+  showNotice('Newsletter HTML exported successfully.');
 }
 
-// Artwork ZIP Gallery
-function renderZipGallery() {
-  const assets = [];
-  state.movies.forEach(m => {
-    if (m.selectedPoster) assets.push({ name: `${m.title}_poster`, url: m.selectedPoster });
-    if (m.selectedBackdrop) assets.push({ name: `${m.title}_backdrop`, url: m.selectedBackdrop });
-  });
-
-  zipCount.textContent = `${assets.length} images queued for ZIP`;
-  btnDownloadZIP.disabled = assets.length === 0;
-
-  if (assets.length === 0) {
-    zipSelectionGrid.innerHTML = '<p style="color:var(--text-muted); grid-column:1/-1;">No images found in workspace. Fetch movie metadata first.</p>';
-    return;
-  }
-
-  zipSelectionGrid.innerHTML = assets.map((a, i) => `
-    <div class="zip-item">
-      <img src="${a.url}" alt="${a.name}" />
-      <div class="zip-item-title">${a.name}</div>
-    </div>
-  `).join('');
-}
-
+// Download Artwork ZIP
 async function downloadArtworkZIP() {
   const assets = [];
   state.movies.forEach(m => {
-    if (m.selectedPoster) assets.push({ name: `${m.title}_poster`, url: m.selectedPoster });
-    if (m.selectedBackdrop) assets.push({ name: `${m.title}_backdrop`, url: m.selectedBackdrop });
+    const poster = m.posterUrl || m.selectedPoster || m.images?.poster?.[0]?.url;
+    if (poster) assets.push({ name: `${m.title}_poster`, url: poster });
+    const backdrop = m.selectedBackdrop || m.images?.backdrop?.[0]?.url;
+    if (backdrop) assets.push({ name: `${m.title}_backdrop`, url: backdrop });
   });
 
-  if (assets.length === 0) return;
+  if (assets.length === 0) {
+    showNotice('No artwork available for ZIP export.', 'error');
+    return;
+  }
 
-  btnDownloadZIP.disabled = true;
-  btnDownloadZIP.textContent = 'Generating ZIP...';
+  showNotice(`Preparing ZIP archive with ${assets.length} image(s)...`);
 
   try {
     const res = await fetch('/api/artwork.zip', {
@@ -591,8 +1108,8 @@ async function downloadArtworkZIP() {
     });
 
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to generate ZIP.');
+      const errData = await res.json();
+      throw new Error(errData.error || 'ZIP export failed.');
     }
 
     const blob = await res.blob();
@@ -602,31 +1119,70 @@ async function downloadArtworkZIP() {
     a.download = 'movie-artwork.zip';
     a.click();
     URL.revokeObjectURL(url);
+    showNotice('Artwork ZIP downloaded.');
   } catch (err) {
-    alert(`ZIP Export Error: ${err.message}`);
-  } finally {
-    btnDownloadZIP.disabled = false;
-    btnDownloadZIP.textContent = '⬇️ Download Artwork ZIP';
+    showNotice(`ZIP Error: ${err.message}`, 'error');
   }
 }
 
-// Project Persistence (JSON / CSV)
-function saveProjectJSON() {
-  const projectData = {
-    version: '1.0',
-    timestamp: new Date().toISOString(),
-    newsletterConfig: state.newsletterConfig,
-    movies: state.movies
-  };
-  const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
+// Export CSV Report
+function exportCSVReport() {
+  if (state.movies.length === 0) {
+    showNotice('No movies to export.', 'error');
+    return;
+  }
+
+  const headers = ['Title', 'Year', 'Language', 'Distributor', 'Poster URL', 'Trailer URL', 'Feature Duration', 'CPL Part 1 Duration', 'CPL Part 2 Duration', 'Synopsis'];
+  const rows = [headers.join(',')];
+
+  state.movies.forEach(m => {
+    const poster = m.posterUrl || m.selectedPoster || m.images?.poster?.[0]?.url || '';
+    const trailer = m.trailerUrl || m.selectedTrailer || m.videos?.[0]?.url || '';
+    const row = [
+      escapeCSV(m.title),
+      escapeCSV(m.year),
+      escapeCSV(m.language),
+      escapeCSV(m.distributor),
+      escapeCSV(poster),
+      escapeCSV(trailer),
+      escapeCSV(m.featureDuration),
+      escapeCSV(m.cplPart1Duration),
+      escapeCSV(m.cplPart2Duration),
+      escapeCSV(m.overview)
+    ];
+    rows.push(row.join(','));
+  });
+
+  const csv = rows.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `qube-movie-studio-project.json`;
+  a.download = 'movie-report.csv';
   a.click();
   URL.revokeObjectURL(url);
+  showNotice('Movie CSV report exported.');
 }
 
+// Save Project JSON
+function saveProjectJSON() {
+  const project = {
+    version: '1.0',
+    movies: state.movies,
+    newsletter: state.newsletter
+  };
+
+  const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'movie-studio-project.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  showNotice('Project file saved.');
+}
+
+// Load Project JSON
 function loadProjectJSON(e) {
   const file = e.target.files[0];
   if (!file) return;
@@ -635,43 +1191,45 @@ function loadProjectJSON(e) {
   reader.onload = (event) => {
     try {
       const data = JSON.parse(event.target.result);
-      if (data.movies && Array.isArray(data.movies)) {
+      if (data && Array.isArray(data.movies)) {
+        if (state.movies.length > 0) {
+          if (!confirm('Replace your current movie workspace with this project file?')) return;
+        }
         state.movies = data.movies;
-        if (data.newsletterConfig) state.newsletterConfig = data.newsletterConfig;
-        updateWorkspaceUI();
-        alert('Project loaded successfully!');
+        if (data.newsletter) state.newsletter = { ...state.newsletter, ...data.newsletter };
+        state.selectedUid = state.movies[0]?.uid || null;
+        updateAllUI();
+        showNotice('Project loaded successfully.');
+      } else {
+        showNotice('Invalid project file format.', 'error');
       }
     } catch {
-      alert('Invalid project JSON file.');
+      showNotice('Could not parse project file.', 'error');
     }
   };
   reader.readAsText(file);
 }
 
-function exportCSV() {
-  if (state.movies.length === 0) {
-    alert('No movies in workspace to export.');
-    return;
-  }
+// Helper Utilities
+function escapeHTML(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
-  const rows = [['Title', 'Year', 'Overview', 'Poster URL', 'Backdrop URL', 'Trailer URL']];
-  state.movies.forEach(m => {
-    rows.push([
-      `"${(m.title || '').replace(/"/g, '""')}"`,
-      `"${m.year || ''}"`,
-      `"${(m.overview || '').replace(/"/g, '""')}"`,
-      `"${m.selectedPoster || ''}"`,
-      `"${m.selectedBackdrop || ''}"`,
-      `"${m.selectedTrailer || ''}"`
-    ]);
-  });
+function escapeCSV(str) {
+  if (!str) return '""';
+  const clean = String(str).replace(/"/g, '""');
+  return `"${clean}"`;
+}
 
-  const csvContent = rows.map(r => r.join(',')).join('\n');
-  const blob = new Blob([csvContent], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'movie-workspace.csv';
-  a.click();
-  URL.revokeObjectURL(url);
+function extractYouTubeID(url) {
+  if (!url) return null;
+  if (/^[a-zA-Z0-9_-]{11}$/.test(url)) return url;
+  const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|shorts\/))([a-zA-Z0-9_-]{11})/);
+  return match ? match[1] : null;
 }

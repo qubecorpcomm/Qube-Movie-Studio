@@ -9,6 +9,7 @@
     "start": "node --env-file-if-exists=.env server.mjs",
     "dev": "node --env-file-if-exists=.env server.mjs",
     "build": "node --check server.mjs",
+    "lint": "node --check server.mjs public/core.mjs public/app.mjs",
     "test": "node --test"
   },
   "dependencies": { "pdfjs-dist": "5.6.205", "jszip": "3.10.1" }
