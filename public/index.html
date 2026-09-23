@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Qube Movie Studio - Artwork, Trailer & Newsletter Workspace</title>
+  <meta name="description" content="Movie artwork, trailer lookup and newsletter workspace">
+  <meta property="og:title" content="Qube Movie Studio">
+  <meta property="og:description" content="Movie artwork, trailer lookup and newsletter workspace">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header Navbar -->
+    <header class="navbar">
+      <div class="nav-brand">
+        <div class="logo-icon">🎬</div>
+        <div>
+          <h1>Qube Movie Studio</h1>
+          <p class="tagline">Artwork, Trailer & Newsletter Workspace</p>
+        </div>
+      </div>
+      <div class="nav-status" id="statusBadge">
+        <span class="badge badge-warning">Checking API connection...</span>
+      </div>
+      <div class="nav-actions">
+        <button id="btnDemo" class="btn btn-secondary">⚡ Load Demo</button>
+        <button id="btnLoadProject" class="btn btn-secondary">📂 Open Project</button>
+        <button id="btnSaveProject" class="btn btn-secondary">💾 Save Project</button>
+        <input type="file" id="fileProjectInput" accept=".json" style="display: none;">
+      </div>
+    </header>
+
+    <!-- API Warning Alert Banner if TMDB key is unconfigured -->
+    <div id="apiAlert" class="alert-banner hidden">
+      <div class="alert-content">
+        <span class="alert-icon">⚠️</span>
+        <div>
+          <strong>TMDB API key required for live movie metadata:</strong>
+          Set <code>TMDB_API_KEY</code> in your environment or <code>.env</code> file. You can still test imports, custom artwork URLs, and newsletter generation.
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Workspace Container -->
+    <main class="main-container">
+      <!-- Tabs Navigation -->
+      <div class="tab-nav">
+        <button class="tab-btn active" data-tab="import">📥 Import & Input</button>
+        <button class="tab-btn" data-tab="workspace">🎬 Workspace (<span id="movieCount">0</span>)</button>
+        <button class="tab-btn" data-tab="newsletter">📧 Newsletter Builder</button>
+        <button class="tab-btn" data-tab="zip">📦 Artwork Export</button>
+      </div>
+
+      <!-- Tab 1: Import & Input -->
+      <section id="tab-import" class="tab-content active">
+        <div class="grid-2col">
+          <div class="card">
+            <h2>📥 Text / CSV / List Input</h2>
+            <p class="card-desc">Paste titles line by line, formatted as <code>Title (Year)</code> or <code>Title, Year</code>.</p>
+            <textarea id="importText" placeholder="Inception (2010)&#10;Interstellar (2014)&#10;Oppenheimer (2023)&#10;Dune: Part Two (2024)" rows="10"></textarea>
+            <div class="card-actions">
+              <button id="btnImportText" class="btn btn-primary">Add Movies to Workspace</button>
+              <button id="btnClearImport" class="btn btn-ghost">Clear Text</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>📄 File Import (.txt, .csv, .pdf)</h2>
+            <p class="card-desc">Upload a TXT file, CSV list, or selectable-text PDF document containing movie titles.</p>
+            <div class="drop-zone" id="dropZone">
+              <div class="drop-icon">📄</div>
+              <p>Drag & drop file here or <strong>browse file</strong></p>
+              <span class="drop-hint">Supports .txt, .csv, and selectable-text .pdf (up to 150 pages)</span>
+              <input type="file" id="fileImportInput" accept=".txt,.csv,.pdf" style="display: none;">
+            </div>
+            <div id="fileUploadStatus" class="status-msg"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 2: Workspace / Movie Cards -->
+      <section id="tab-workspace" class="tab-content">
+        <div class="workspace-toolbar">
+          <div class="toolbar-info">
+            <span id="selectedCount">0 selected</span>
+          </div>
+          <div class="toolbar-buttons">
+            <button id="btnFetchAll" class="btn btn-primary">🔍 Fetch All Metadata</button>
+            <button id="btnSelectAll" class="btn btn-secondary">Select All</button>
+            <button id="btnUnselectAll" class="btn btn-secondary">Deselect All</button>
+            <button id="btnExportCSV" class="btn btn-secondary">📊 Export CSV</button>
+            <button id="btnRemoveSelected" class="btn btn-danger">🗑️ Remove Selected</button>
+          </div>
+        </div>
+
+        <div id="movieGrid" class="movie-grid">
+          <div class="empty-state">
+            <div class="empty-icon">🎬</div>
+            <h3>No movies in workspace yet</h3>
+            <p>Paste movie titles in the Import tab or click <strong>Load Demo</strong> above to get started.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 3: Newsletter Builder -->
+      <section id="tab-newsletter" class="tab-content">
+        <div class="grid-layout-sidebar">
+          <div class="card sidebar-card">
+            <h2>🎨 Newsletter Settings</h2>
+            <div class="form-group">
+              <label for="nlTitle">Title</label>
+              <input type="text" id="nlTitle" value="Weekly Movie Brief">
+            </div>
+            <div class="form-group">
+              <label for="nlSubtitle">Subtitle</label>
+              <input type="text" id="nlSubtitle" value="Hand-picked featured releases & trailers">
+            </div>
+            <div class="form-group">
+              <label for="nlHeaderBg">Header Background</label>
+              <input type="color" id="nlHeaderBg" value="#0f172a">
+            </div>
+            <div class="form-group">
+              <label for="nlHeaderTextColor">Header Text Color</label>
+              <input type="color" id="nlHeaderTextColor" value="#ffffff">
+            </div>
+            <div class="form-group">
+              <label for="nlAccentColor">Accent Button Color</label>
+              <input type="color" id="nlAccentColor" value="#2563eb">
+            </div>
+            <div class="card-actions-stacked">
+              <button id="btnCopyHTML" class="btn btn-primary">📋 Copy HTML Code</button>
+              <button id="btnDownloadHTML" class="btn btn-secondary">⬇️ Download HTML File</button>
+            </div>
+          </div>
+
+          <div class="card preview-card">
+            <h2>👁️ Live Email Newsletter Preview</h2>
+            <div class="iframe-container">
+              <iframe id="newsletterPreview" title="Newsletter Preview"></iframe>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 4: Artwork Export ZIP -->
+      <section id="tab-zip" class="tab-content">
+        <div class="card">
+          <h2>📦 Export High-Resolution Artwork ZIP</h2>
+          <p class="card-desc">Select posters, backdrops, and logos from your workspace movies to package into a single zip archive download.</p>
+          
+          <div class="zip-toolbar">
+            <span id="zipCount">0 images queued for ZIP</span>
+            <button id="btnDownloadZIP" class="btn btn-primary" disabled>⬇️ Download Artwork ZIP</button>
+          </div>
+
+          <div id="zipSelectionGrid" class="zip-grid">
+            <!-- Dynamically populated artwork gallery -->
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Movie Detail / Alternative Artwork Modal -->
+    <div id="movieModal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="modalTitle">Movie Refinement</h3>
+          <button id="modalClose" class="btn-close">&times;</button>
+        </div>
+        <div class="modal-body" id="modalBody">
+          <!-- Dynamic Content -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.mjs"></script>
+</body>
+</html>

@@ -76,4 +76,4 @@ export function createServer(){return http.createServer(async(req,res)=>{
     send(res,404,{error:'Not found.'});
   }catch(e){send(res,e.status||500,{error:e.status?e.message:'Unable to complete this request. Please retry.'});}
 });}
-if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){const port=Number(process.env.PORT)||3000,host=process.env.HOST||'127.0.0.1';createServer().listen(port,host,()=>console.log(`Movie Studio is ready at http://${host}:${port}`));}
+if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){const port=Number(process.env.PORT)||3000,host=process.env.HOST||'0.0.0.0';createServer().listen(port,host,()=>console.log(`Movie Studio is ready at http://${host}:${port}`));}
