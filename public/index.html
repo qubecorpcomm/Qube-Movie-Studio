@@ -70,8 +70,13 @@
           <p class="bc-sub">Your next release, all in one place.</p>
         </div>
         <div class="top-actions">
-          <button class="btn btn-secondary" id="btnOpenProject">Open project</button>
-          <button class="btn btn-secondary" id="btnSaveProject">Save project ↗</button>
+          <button class="btn btn-secondary" id="btnCloudProjects">☁ Cloud projects</button>
+          <button class="btn btn-primary" id="btnSignInGoogle">Sign in with Google</button>
+          <div id="userProfileBadge" class="user-profile-badge hidden">
+            <img id="userAvatar" src="" class="user-avatar" alt="User Avatar">
+            <span id="userName" class="user-name"></span>
+            <button id="btnSignOut" class="btn btn-secondary btn-sm">Sign out</button>
+          </div>
           <input type="file" id="fileProjectInput" accept=".json" style="display:none;">
         </div>
       </header>
@@ -136,12 +141,11 @@
                 <h2 class="card-heading">Start with your movie list</h2>
                 <p class="card-subheading">Paste titles, or import a TXT, CSV or selectable-text PDF.</p>
               </div>
-              <button class="btn btn-secondary btn-sm" id="btnTrySample">Try sample list</button>
             </div>
 
             <div class="import-grid">
               <div class="textarea-wrap">
-                <textarea id="movieInputText" class="form-textarea" rows="4" placeholder="Vikram (2022) Tamil&#10;Interstellar | 2014 | English&#10;A movie title or IMDb ID"></textarea>
+                <textarea id="movieInputText" class="form-textarea" rows="4" placeholder="Paste movie titles (one per line) or IMDb IDs..."></textarea>
               </div>
               <div class="import-actions">
                 <button class="btn btn-primary btn-full" id="btnAddTitles">Add titles to library</button>
@@ -259,68 +263,162 @@
               <div class="section-head">
                 <div>
                   <h2 class="card-heading">Make it your newsletter</h2>
-                  <p class="card-subheading">Uses the checked movies in your shared library.</p>
+                  <p class="card-subheading">Configure campaign settings, select movies, and refine details.</p>
                 </div>
               </div>
 
-              <div class="form-stack">
-                <div class="form-group">
-                  <label class="form-label" for="nlTitle">Newsletter title</label>
-                  <input type="text" id="nlTitle" class="form-input" value="This week at the movies">
-                </div>
+              <!-- 1. NEWSLETTER SETTINGS -->
+              <fieldset class="nl-fieldset">
+                <legend class="nl-legend">1. Newsletter Settings</legend>
+                <div class="form-stack">
+                  <div class="form-group">
+                    <label class="form-label" for="nlTitle">Newsletter title</label>
+                    <input type="text" id="nlTitle" class="form-input" value="This week at the movies">
+                  </div>
 
-                <div class="form-group">
-                  <label class="form-label" for="nlIntro">Introduction</label>
-                  <textarea id="nlIntro" class="form-textarea" rows="3">Discover the latest releases, with trailers and technical details in one place.</textarea>
-                </div>
+                  <div class="form-group">
+                    <label class="form-label" for="nlLayoutTemplate">Layout template</label>
+                    <select id="nlLayoutTemplate" class="form-select">
+                      <option value="one-column">One-column (Standard Card)</option>
+                      <option value="two-column">Two-column (Grid Cards)</option>
+                    </select>
+                  </div>
 
-                <div class="form-group">
-                  <label class="form-label" for="nlTopBannerUrl">Top banner URL</label>
-                  <div class="input-with-button">
-                    <input type="text" id="nlTopBannerUrl" class="form-input" placeholder="https://…">
-                    <button class="btn btn-secondary btn-sm" id="btnUploadTopBanner">Upload top banner</button>
-                    <input type="file" id="fileTopBannerInput" accept="image/*" style="display:none;">
+                  <div class="form-group">
+                    <label class="form-label" for="nlIntro">Introduction</label>
+                    <textarea id="nlIntro" class="form-textarea" rows="2">Keep tabs on the feature releases coming your way and plan your screening schedules seamlessly with our weekly feature report.</textarea>
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label" for="nlTopBannerUrl">Top banner URL</label>
+                    <div class="input-with-button">
+                      <input type="text" id="nlTopBannerUrl" class="form-input" placeholder="https://…">
+                      <button class="btn btn-secondary btn-sm" id="btnUploadTopBanner">Upload</button>
+                      <input type="file" id="fileTopBannerInput" accept="image/*" style="display:none;">
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label" for="nlTopBannerLink">Top banner link</label>
+                    <input type="text" id="nlTopBannerLink" class="form-input" placeholder="https://…">
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label" for="nlSecondBannerUrl">Second banner URL</label>
+                    <div class="input-with-button">
+                      <input type="text" id="nlSecondBannerUrl" class="form-input" placeholder="https://…">
+                      <button class="btn btn-secondary btn-sm" id="btnUploadSecondBanner">Upload</button>
+                      <input type="file" id="fileSecondBannerInput" accept="image/*" style="display:none;">
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label" for="nlSecondBannerLink">Second banner link</label>
+                    <input type="text" id="nlSecondBannerLink" class="form-input" placeholder="https://…">
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label" for="nlFooterText">Footer text</label>
+                    <textarea id="nlFooterText" class="form-textarea" rows="2"></textarea>
                   </div>
                 </div>
+              </fieldset>
 
-                <div class="form-group">
-                  <label class="form-label" for="nlTopBannerLink">Top banner link</label>
-                  <input type="text" id="nlTopBannerLink" class="form-input" placeholder="https://… or mailto:…">
+              <!-- 2. MOVIE LIST -->
+              <fieldset class="nl-fieldset">
+                <legend class="nl-legend">2. Movie List</legend>
+                <div class="nl-movie-listbox" id="nlMovieListBox" role="listbox" tabindex="0">
+                  <!-- Movie rows rendered here dynamically -->
                 </div>
+              </fieldset>
 
-                <div class="form-group">
-                  <label class="form-label" for="nlSecondBannerUrl">Second banner URL</label>
-                  <div class="input-with-button">
-                    <input type="text" id="nlSecondBannerUrl" class="form-input" placeholder="https://…">
-                    <button class="btn btn-secondary btn-sm" id="btnUploadSecondBanner">Upload second banner</button>
-                    <input type="file" id="fileSecondBannerInput" accept="image/*" style="display:none;">
+              <!-- 3. SELECTED MOVIE DETAILS -->
+              <fieldset class="nl-fieldset">
+                <legend class="nl-legend">3. Selected Movie Details</legend>
+                <div class="nl-form-table">
+                  <div class="nl-form-row">
+                    <label class="nl-row-label" for="nlDetailTitle">Title:</label>
+                    <div class="nl-row-input">
+                      <input type="text" id="nlDetailTitle" class="form-input nl-control" placeholder="Movie Title">
+                    </div>
+                  </div>
+                  <div class="nl-form-row">
+                    <label class="nl-row-label" for="nlDetailYear">Year:</label>
+                    <div class="nl-row-input">
+                      <input type="text" id="nlDetailYear" class="form-input nl-control" placeholder="2026">
+                    </div>
+                  </div>
+                  <div class="nl-form-row">
+                    <label class="nl-row-label" for="nlDetailLanguage">Language:</label>
+                    <div class="nl-row-input">
+                      <input type="text" id="nlDetailLanguage" class="form-input nl-control" placeholder="English – IMAX 5">
+                    </div>
+                  </div>
+                  <div class="nl-form-row">
+                    <label class="nl-row-label" for="nlDetailDistributor">Distributor:</label>
+                    <div class="nl-row-input">
+                      <input type="text" id="nlDetailDistributor" class="form-input nl-control" placeholder="IMAX">
+                    </div>
+                  </div>
+                  <div class="nl-form-row">
+                    <label class="nl-row-label" for="nlDetailPosterUrl">Poster URL:</label>
+                    <div class="nl-row-input nl-input-with-fetch">
+                      <input type="text" id="nlDetailPosterUrl" class="form-input nl-control" placeholder="/w500/... or https://...">
+                      <button type="button" class="btn btn-secondary btn-sm nl-btn-fetch" id="btnNlFetchPoster">Fetch</button>
+                    </div>
+                  </div>
+                  <div class="nl-form-row">
+                    <label class="nl-row-label" for="nlDetailPosterMode">Poster Mode:</label>
+                    <div class="nl-row-input">
+                      <select id="nlDetailPosterMode" class="form-select nl-control">
+                        <option value="auto">Auto (TMDb/Local)</option>
+                        <option value="tmdb">TMDb Poster</option>
+                        <option value="custom">Custom URL</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="nl-form-row">
+                    <label class="nl-row-label" for="nlDetailTrailerUrl">Trailer Link:</label>
+                    <div class="nl-row-input nl-input-with-fetch">
+                      <input type="text" id="nlDetailTrailerUrl" class="form-input nl-control" placeholder="https://www.youtube.com/watch?v=...">
+                      <button type="button" class="btn btn-secondary btn-sm nl-btn-fetch" id="btnNlFetchTrailer">Fetch</button>
+                    </div>
+                  </div>
+                  <div class="nl-form-row">
+                    <label class="nl-row-label" for="nlDetailTrailerMode">Trailer Mode:</label>
+                    <div class="nl-row-input">
+                      <select id="nlDetailTrailerMode" class="form-select nl-control">
+                        <option value="auto">Auto (TMDb/YouTube)</option>
+                        <option value="youtube">YouTube Official</option>
+                        <option value="custom">Custom URL</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="nl-actions-row">
+                    <button type="button" class="btn btn-primary nl-btn-action" id="btnNlApplyChanges">Apply Changes</button>
+                    <button type="button" class="btn btn-secondary nl-btn-action" id="btnNlUpdatePreview">Update Preview</button>
                   </div>
                 </div>
+              </fieldset>
 
-                <div class="form-group">
-                  <label class="form-label" for="nlSecondBannerLink">Second banner link</label>
-                  <input type="text" id="nlSecondBannerLink" class="form-input" placeholder="https://…">
-                </div>
-
-                <div class="form-group">
-                  <label class="form-label" for="nlFooterText">Footer text</label>
-                  <textarea id="nlFooterText" class="form-textarea" rows="2">Movie Studio · Artwork and metadata provided by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</textarea>
-                </div>
-
-                <div class="button-stack">
-                  <button class="btn btn-primary btn-full" id="btnExportHTML">Export email HTML</button>
-                  <button class="btn btn-secondary btn-full" id="btnExportEmbeddedHTML">Export HTML with embedded images</button>
-                </div>
-
-                <p class="help-text">Use public image URLs for email. Uploaded images are embedded; some email clients hide embedded images.</p>
+              <div class="button-stack">
+                <button class="btn btn-primary btn-full" id="btnExportHTML">Export email HTML</button>
+                <button class="btn btn-secondary btn-full" id="btnExportEmbeddedHTML">Export HTML with embedded images</button>
               </div>
+
+              <p class="help-text">Use public image URLs for email. Uploaded images are embedded; some email clients hide embedded images.</p>
             </div>
 
             <!-- RIGHT: PREVIEW CARD -->
             <div class="panel-card nl-preview-card">
               <div class="preview-header">
-                <h3 class="preview-heading">Live preview</h3>
-                <span class="pill">650 PX · EMAIL</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <h3 class="preview-heading">Live preview</h3>
+                  <span class="pill">650 PX · EMAIL</span>
+                </div>
+                <button class="btn btn-primary btn-sm" id="btnPrintNewsletter" type="button" style="display: inline-flex; align-items: center; gap: 6px;">
+                  <span>🖨️</span> Print / Save as PDF
+                </button>
               </div>
               <div class="iframe-container">
                 <iframe id="nlIframePreview" title="Email Newsletter Live Preview" sandbox="allow-same-origin"></iframe>
@@ -377,6 +475,54 @@
       </div>
     </div>
   </dialog>
+
+  <!-- CLOUD PROJECTS MODAL -->
+  <dialog id="cloudModal" class="app-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">Firestore Cloud Projects</h3>
+        <button class="btn-close" id="btnCloseCloudModal" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-description" id="cloudModalDesc">
+          Save and load your workspace projects directly in Firebase Firestore.
+        </p>
+        <div id="cloudAuthWarning" class="modal-status-line hidden" style="color:var(--notice-error-text);">
+          Please sign in with Google to save or load projects in Firestore.
+        </div>
+        <div id="cloudSaveBlock" class="form-group" style="margin-top:12px; margin-bottom:16px;">
+          <label class="form-label" for="inputProjectName">Save Current Workspace as Project</label>
+          <div class="input-with-button">
+            <input type="text" id="inputProjectName" class="form-input" placeholder="e.g. October Releases 2026">
+            <button class="btn btn-primary btn-sm" id="btnSaveToCloud">Save to Cloud</button>
+          </div>
+        </div>
+        <div class="mini-heading" style="margin-top:0;">YOUR SAVED CLOUD PROJECTS</div>
+        <div id="cloudProjectsList" style="max-height: 220px; overflow-y: auto; margin-top:10px;">
+          <p style="color:var(--muted-text); font-size:12px;">Loading cloud projects…</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCloseCloudModalFooter">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- AUTH GATE OVERLAY -->
+  <div id="authGateOverlay" class="auth-gate-overlay">
+    <div class="auth-gate-card">
+      <div class="auth-gate-icon">🔒</div>
+      <h2 class="auth-gate-title">Authorized Access Only</h2>
+      <p class="auth-gate-subtitle">
+        This web application is exclusively for:<br>
+        <span class="auth-gate-email-tag">qubecorpcomm@gmail.com</span>
+      </p>
+      <div id="authGateError" class="auth-gate-error hidden"></div>
+      <button class="btn btn-primary btn-full btn-lg" id="btnGateSignIn">
+        Sign in with Google
+      </button>
+    </div>
+  </div>
 
   <script type="module" src="app.mjs"></script>
 </body>

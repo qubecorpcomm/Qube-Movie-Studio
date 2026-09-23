@@ -1,0 +1,77 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Public profile details for a Movie Studio user",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "email"]
+    },
+    "Project": {
+      "title": "Movie Project",
+      "description": "Saved movie workspace and newsletter project",
+      "type": "object",
+      "properties": {
+        "projectId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["projectId", "ownerId", "name"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Stores user profile and account details"
+    },
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "Stores saved movie projects for authenticated users"
+    }
+  }
+}

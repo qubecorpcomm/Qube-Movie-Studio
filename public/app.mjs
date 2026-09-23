@@ -1,4 +1,62 @@
 import { parseMovieListText, generateNewsletterHTML, langCode } from './core.mjs';
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged
+} from 'https://www.gstatic.com/firebasejs/11.4.0/firebase-auth.js';
+import {
+  getFirestore,
+  doc,
+  getDocFromServer,
+  setDoc,
+  deleteDoc,
+  collection,
+  query,
+  where,
+  onSnapshot
+} from 'https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js';
+
+// Firebase Global References
+let firebaseApp = null;
+let db = null;
+let auth = null;
+let currentUser = null;
+let unsubscribeProjects = null;
+let cloudProjects = [];
+
+// Firestore Operation Types & Error Handler
+const OperationType = {
+  CREATE: 'create',
+  UPDATE: 'update',
+  DELETE: 'delete',
+  LIST: 'list',
+  GET: 'get',
+  WRITE: 'write',
+};
+
+function handleFirestoreError(error, operationType, path) {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth?.currentUser?.uid || null,
+      email: auth?.currentUser?.email || null,
+      emailVerified: auth?.currentUser?.emailVerified || null,
+      isAnonymous: auth?.currentUser?.isAnonymous || null,
+      tenantId: auth?.currentUser?.tenantId || null,
+      providerInfo: auth?.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 // Application Shared State
 const state = {
@@ -16,58 +74,41 @@ const state = {
     topBannerLink: '',
     secondBannerUrl: '',
     secondBannerLink: '',
-    footer: 'Movie Studio · Artwork and metadata provided by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.'
+    footer: 'Movie Studio · Artwork and metadata provided by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.',
+    layoutTemplate: 'one-column'
   }
 };
-
-const SAMPLE_MOVIES_TEXT = `Vikram (2022) Tamil
-Interstellar | 2014 | English
-Oppenheimer (2023)
-Dune: Part Two (2024)`;
 
 // DOM Initialization
 document.addEventListener('DOMContentLoaded', () => {
   loadLocalState();
   checkAPIStatus();
+  initFirebase();
   setupNavigation();
   setupEventHandlers();
 
-  // If initial state is empty, load sample movies
-  if (state.movies.length === 0) {
-    addMoviesFromParsedList(parseMovieListText(SAMPLE_MOVIES_TEXT));
-  } else {
-    if (!state.selectedUid && state.movies.length > 0) {
-      state.selectedUid = state.movies[0].uid;
-    }
-    updateAllUI();
+  if (!state.selectedUid && state.movies.length > 0) {
+    state.selectedUid = state.movies[0].uid;
   }
+  updateAllUI();
 });
 
-// Save / Load Local State
+const ALLOWED_EMAIL = 'qubecorpcomm@gmail.com';
+
+// Save / Load Local State - Session starts fresh on reload/reopen (no persistence across reloads)
 function saveLocalState() {
   try {
-    const payload = {
-      movies: state.movies,
-      selectedUid: state.selectedUid,
-      newsletter: state.newsletter
-    };
-    localStorage.setItem('movie_studio_state_v1', JSON.stringify(payload));
+    localStorage.removeItem('movie_studio_state_v1');
   } catch (err) {
-    console.warn('Could not save to localStorage', err);
+    // Ignore storage error
   }
 }
 
 function loadLocalState() {
   try {
-    const raw = localStorage.getItem('movie_studio_state_v1');
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed.movies)) state.movies = parsed.movies;
-      if (parsed.selectedUid) state.selectedUid = parsed.selectedUid;
-      if (parsed.newsletter) state.newsletter = { ...state.newsletter, ...parsed.newsletter };
-    }
+    localStorage.removeItem('movie_studio_state_v1');
   } catch (err) {
-    console.warn('Could not load from localStorage', err);
+    // Ignore storage error
   }
 }
 
@@ -95,6 +136,277 @@ async function checkAPIStatus() {
     statusDot.className = 'status-dot offline';
     statusText.textContent = 'Server unavailable';
     modalStatusLine.textContent = 'Server could not be reached.';
+  }
+}
+
+// Initialize Firebase & Firestore
+async function initFirebase() {
+  try {
+    const res = await fetch('/api/firebase-config');
+    if (!res.ok) return;
+    const config = await res.json();
+    if (!config.projectId) return;
+
+    firebaseApp = initializeApp(config);
+    db = getFirestore(firebaseApp, config.firestoreDatabaseId);
+    auth = getAuth(firebaseApp);
+
+    // Validate connection to Firestore on boot
+    testFirestoreConnection();
+
+    // Listen to Auth State
+    onAuthStateChanged(auth, async (user) => {
+      const gateErr = document.getElementById('authGateError');
+      if (user) {
+        const userEmail = (user.email || '').toLowerCase();
+        if (userEmail === ALLOWED_EMAIL) {
+          currentUser = user;
+          if (gateErr) gateErr.classList.add('hidden');
+          updateAuthUI();
+          saveUserProfile(user);
+          subscribeToCloudProjects(user.uid);
+        } else {
+          // Unauthorized email logged in
+          if (gateErr) {
+            gateErr.textContent = `Access Denied: ${user.email} is not authorized. Only qubecorpcomm@gmail.com can access this application.`;
+            gateErr.classList.remove('hidden');
+          }
+          await signOut(auth);
+          currentUser = null;
+          updateAuthUI();
+        }
+      } else {
+        currentUser = null;
+        updateAuthUI();
+      }
+    });
+  } catch (err) {
+    console.warn('Firebase initialization skipped or failed:', err);
+  }
+}
+
+async function testFirestoreConnection() {
+  if (!db) return;
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+
+// User Profile Record
+async function saveUserProfile(user) {
+  if (!db || !user) return;
+  const path = `users/${user.uid}`;
+  try {
+    const userDocRef = doc(db, 'users', user.uid);
+    const profile = {
+      userId: user.uid,
+      email: user.email || '',
+      displayName: user.displayName || user.email || 'User',
+      photoURL: user.photoURL || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    await setDoc(userDocRef, profile, { merge: true });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+// Auth Handlers
+async function signInWithGoogle() {
+  if (!auth) {
+    showNotice('Firebase Auth is not available.', 'error');
+    return;
+  }
+  const provider = new GoogleAuthProvider();
+  try {
+    const result = await signInWithPopup(auth, provider);
+    const signedInEmail = (result.user?.email || '').toLowerCase();
+    if (signedInEmail !== ALLOWED_EMAIL) {
+      const gateErr = document.getElementById('authGateError');
+      if (gateErr) {
+        gateErr.textContent = `Access Denied: ${result.user?.email} is not authorized. Only qubecorpcomm@gmail.com can access this application.`;
+        gateErr.classList.remove('hidden');
+      }
+      await signOut(auth);
+      currentUser = null;
+      updateAuthUI();
+    } else {
+      showNotice(`Signed in as ${signedInEmail}`);
+    }
+  } catch (err) {
+    showNotice(`Sign-in error: ${err.message}`, 'error');
+  }
+}
+
+async function signOutUser() {
+  if (!auth) return;
+  try {
+    await signOut(auth);
+    currentUser = null;
+    updateAuthUI();
+    showNotice('Signed out successfully.');
+  } catch (err) {
+    showNotice(`Sign-out error: ${err.message}`, 'error');
+  }
+}
+
+function updateAuthUI() {
+  const btnSignIn = document.getElementById('btnSignInGoogle');
+  const badge = document.getElementById('userProfileBadge');
+  const avatar = document.getElementById('userAvatar');
+  const nameEl = document.getElementById('userName');
+  const authWarning = document.getElementById('cloudAuthWarning');
+  const saveBlock = document.getElementById('cloudSaveBlock');
+  const overlay = document.getElementById('authGateOverlay');
+  const isAuthorized = currentUser && (currentUser.email || '').toLowerCase() === ALLOWED_EMAIL;
+
+  if (isAuthorized) {
+    if (btnSignIn) btnSignIn.classList.add('hidden');
+    if (badge) badge.classList.remove('hidden');
+    if (avatar) avatar.src = currentUser.photoURL || 'https://www.gstatic.com/images/branding/product/2x/avatar_square_32dp.png';
+    if (nameEl) nameEl.textContent = currentUser.displayName || currentUser.email || 'qubecorpcomm';
+    if (authWarning) authWarning.classList.add('hidden');
+    if (saveBlock) saveBlock.classList.remove('hidden');
+    if (overlay) overlay.classList.add('hidden');
+  } else {
+    if (btnSignIn) btnSignIn.classList.remove('hidden');
+    if (badge) badge.classList.add('hidden');
+    if (authWarning) authWarning.classList.remove('hidden');
+    if (saveBlock) saveBlock.classList.add('hidden');
+    if (overlay) overlay.classList.remove('hidden');
+  }
+}
+
+// Cloud Projects Firestore Subscription
+function subscribeToCloudProjects(userId) {
+  if (!db) return;
+  const path = 'projects';
+  try {
+    const q = query(collection(db, 'projects'), where('ownerId', '==', userId));
+    if (unsubscribeProjects) unsubscribeProjects();
+
+    unsubscribeProjects = onSnapshot(q, (snapshot) => {
+      cloudProjects = snapshot.docs.map(docSnap => ({
+        id: docSnap.id,
+        ...docSnap.data()
+      }));
+      renderCloudProjectsList();
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, path);
+  }
+}
+
+function renderCloudProjectsList() {
+  const container = document.getElementById('cloudProjectsList');
+  if (!container) return;
+
+  if (!currentUser) {
+    container.innerHTML = `<p style="color:var(--muted-text); font-size:12px;">Sign in with Google to view and load your cloud projects.</p>`;
+    return;
+  }
+
+  if (cloudProjects.length === 0) {
+    container.innerHTML = `<p style="color:var(--muted-text); font-size:12px;">No cloud projects saved yet.</p>`;
+    return;
+  }
+
+  container.innerHTML = cloudProjects.map(proj => {
+    const movieCount = Array.isArray(proj.movies) ? proj.movies.length : 0;
+    const dateStr = proj.updatedAt ? new Date(proj.updatedAt).toLocaleDateString() : 'Recent';
+    return `
+      <div class="cloud-project-item">
+        <div class="cloud-project-info">
+          <span class="cloud-project-name">${escapeHTML(proj.name || 'Untitled Project')}</span>
+          <span class="cloud-project-date">${movieCount} movie(s) · Updated ${dateStr}</span>
+        </div>
+        <div class="cloud-project-actions">
+          <button class="btn btn-secondary btn-sm btn-load-cloud" data-id="${proj.id}">Load</button>
+          <button class="btn btn-danger btn-sm btn-delete-cloud" data-id="${proj.id}">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Attach item action handlers
+  container.querySelectorAll('.btn-load-cloud').forEach(btn => {
+    btn.addEventListener('click', () => loadCloudProject(btn.dataset.id));
+  });
+  container.querySelectorAll('.btn-delete-cloud').forEach(btn => {
+    btn.addEventListener('click', () => deleteCloudProject(btn.dataset.id));
+  });
+}
+
+// Save Workspace to Firestore Cloud Project
+async function saveCurrentProjectToCloud() {
+  if (!db || !currentUser) {
+    showNotice('Please sign in with Google to save projects to Cloud.', 'error');
+    return;
+  }
+
+  const nameInput = document.getElementById('inputProjectName');
+  const projName = (nameInput?.value || '').trim() || `Workspace ${new Date().toLocaleDateString()}`;
+
+  const projId = 'proj_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+  const path = `projects/${projId}`;
+
+  const payload = {
+    projectId: projId,
+    ownerId: currentUser.uid,
+    name: projName,
+    movies: state.movies,
+    newsletter: state.newsletter,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  try {
+    await setDoc(doc(db, 'projects', projId), payload);
+    showNotice(`Saved project "${projName}" to Cloud!`);
+    if (nameInput) nameInput.value = '';
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+function loadCloudProject(projId) {
+  const proj = cloudProjects.find(p => p.id === projId);
+  if (!proj) return;
+
+  if (state.movies.length > 0) {
+    if (!confirm(`Replace current workspace with cloud project "${proj.name}"?`)) return;
+  }
+
+  if (Array.isArray(proj.movies)) state.movies = proj.movies;
+  if (proj.newsletter) state.newsletter = { ...state.newsletter, ...proj.newsletter };
+  state.selectedUid = state.movies[0]?.uid || null;
+
+  saveLocalState();
+  updateAllUI();
+  document.getElementById('cloudModal')?.close();
+  showNotice(`Loaded cloud project "${proj.name}".`);
+}
+
+async function deleteCloudProject(projId) {
+  if (!db || !currentUser) return;
+  const proj = cloudProjects.find(p => p.id === projId);
+  if (!proj) return;
+
+  if (!confirm(`Delete cloud project "${proj.name}"? This cannot be undone.`)) return;
+
+  const path = `projects/${projId}`;
+  try {
+    await deleteDoc(doc(db, 'projects', projId));
+    showNotice(`Deleted cloud project "${proj.name}".`);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
   }
 }
 
@@ -156,11 +468,6 @@ function setupEventHandlers() {
     textarea.focus();
   });
 
-  // Try sample list
-  document.getElementById('btnTrySample').addEventListener('click', () => {
-    document.getElementById('movieInputText').value = SAMPLE_MOVIES_TEXT;
-  });
-
   // Add titles
   document.getElementById('btnAddTitles').addEventListener('click', () => {
     const text = document.getElementById('movieInputText').value;
@@ -220,15 +527,40 @@ function setupEventHandlers() {
   document.getElementById('btnCloseConnModal').addEventListener('click', () => connModal.close());
   document.getElementById('btnDoneConnModal').addEventListener('click', () => connModal.close());
 
+  // Cloud Projects Modal & Auth setup
+  const cloudModal = document.getElementById('cloudModal');
+  const btnCloud = document.getElementById('btnCloudProjects');
+  if (btnCloud && cloudModal) {
+    btnCloud.addEventListener('click', () => cloudModal.showModal());
+  }
+  const btnCloseCloud1 = document.getElementById('btnCloseCloudModal');
+  const btnCloseCloud2 = document.getElementById('btnCloseCloudModalFooter');
+  if (btnCloseCloud1 && cloudModal) btnCloseCloud1.addEventListener('click', () => cloudModal.close());
+  if (btnCloseCloud2 && cloudModal) btnCloseCloud2.addEventListener('click', () => cloudModal.close());
+
+  const btnSignIn = document.getElementById('btnSignInGoogle');
+  if (btnSignIn) btnSignIn.addEventListener('click', signInWithGoogle);
+
+  const btnGateSignIn = document.getElementById('btnGateSignIn');
+  if (btnGateSignIn) btnGateSignIn.addEventListener('click', signInWithGoogle);
+
+  const btnSignOut = document.getElementById('btnSignOut');
+  if (btnSignOut) btnSignOut.addEventListener('click', signOutUser);
+
+  const btnSaveCloud = document.getElementById('btnSaveToCloud');
+  if (btnSaveCloud) btnSaveCloud.addEventListener('click', saveCurrentProjectToCloud);
+
   // Confirm modal setup
   document.getElementById('btnCloseConfirmModal').addEventListener('click', closeConfirmModal);
   document.getElementById('btnCancelConfirmModal').addEventListener('click', closeConfirmModal);
 
   // Project Save / Load
-  document.getElementById('btnSaveProject').addEventListener('click', saveProjectJSON);
+  const btnSaveProject = document.getElementById('btnSaveProject');
+  if (btnSaveProject) btnSaveProject.addEventListener('click', saveProjectJSON);
   const fileProjectInput = document.getElementById('fileProjectInput');
-  document.getElementById('btnOpenProject').addEventListener('click', () => fileProjectInput.click());
-  fileProjectInput.addEventListener('change', loadProjectJSON);
+  const btnOpenProject = document.getElementById('btnOpenProject');
+  if (btnOpenProject && fileProjectInput) btnOpenProject.addEventListener('click', () => fileProjectInput.click());
+  if (fileProjectInput) fileProjectInput.addEventListener('change', loadProjectJSON);
 
   // Newsletter Controls Live Sync
   setupNewsletterSync();
@@ -295,6 +627,7 @@ function updateAllUI() {
 
   renderCollectionList();
   renderSelectedMovieDetail();
+  renderNewsletterMovieList();
   renderNewsletterPreview();
   saveLocalState();
 }
@@ -951,16 +1284,23 @@ async function handleFileImport(e) {
 
   try {
     let text = '';
-    if (file.name.endsWith('.pdf')) {
+    if (file.name.toLowerCase().endsWith('.pdf')) {
       const buffer = await file.arrayBuffer();
       const res = await fetch('/api/pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/pdf' },
         body: buffer
       });
-      const data = await res.json();
+      const contentType = res.headers.get('content-type') || '';
+      let data = {};
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const rawErr = await res.text();
+        throw new Error(`Server returned ${res.status}: ${rawErr.replace(/<[^>]*>?/gm, '').trim().slice(0, 80)}`);
+      }
       if (!res.ok) throw new Error(data.error || 'Failed to extract text from PDF.');
-      text = data.text;
+      text = data.text || '';
     } else {
       text = await file.text();
     }
@@ -979,13 +1319,21 @@ async function handleFileImport(e) {
 
 // Newsletter Sync Setup
 function setupNewsletterSync() {
-  const fields = ['nlTitle', 'nlIntro', 'nlTopBannerUrl', 'nlTopBannerLink', 'nlSecondBannerUrl', 'nlSecondBannerLink', 'nlFooterText'];
+  const layoutSelectInit = document.getElementById('nlLayoutTemplate');
+  if (layoutSelectInit && state.newsletter.layoutTemplate) {
+    layoutSelectInit.value = state.newsletter.layoutTemplate;
+  }
+
+  const fields = ['nlTitle', 'nlLayoutTemplate', 'nlIntro', 'nlTopBannerUrl', 'nlTopBannerLink', 'nlSecondBannerUrl', 'nlSecondBannerLink', 'nlFooterText'];
 
   fields.forEach(id => {
     const input = document.getElementById(id);
     if (input) {
-      input.addEventListener('input', () => {
+      const eventName = input.tagName === 'SELECT' ? 'change' : 'input';
+      input.addEventListener(eventName, () => {
         state.newsletter.title = document.getElementById('nlTitle').value;
+        const layoutSelect = document.getElementById('nlLayoutTemplate');
+        if (layoutSelect) state.newsletter.layoutTemplate = layoutSelect.value;
         state.newsletter.intro = document.getElementById('nlIntro').value;
         state.newsletter.topBannerUrl = document.getElementById('nlTopBannerUrl').value;
         state.newsletter.topBannerLink = document.getElementById('nlTopBannerLink').value;
@@ -1013,9 +1361,226 @@ function setupNewsletterSync() {
     renderNewsletterPreview();
   });
 
+  // Newsletter Action Buttons (Fetch, Apply Changes, Update Preview)
+  const btnFetchPoster = document.getElementById('btnNlFetchPoster');
+  if (btnFetchPoster) {
+    btnFetchPoster.addEventListener('click', async () => {
+      const activeMovie = state.movies.find(item => item.uid === state.selectedUid);
+      if (!activeMovie) {
+        showNotice('Please select a movie from the list first.', 'error');
+        return;
+      }
+      showNotice(`Fetching poster artwork for "${activeMovie.title}"...`);
+      if (!activeMovie.images || !activeMovie.images.poster || activeMovie.images.poster.length === 0) {
+        await fetchMovieMetadata(activeMovie);
+      }
+      const poster = activeMovie.selectedPoster || activeMovie.posterUrl || activeMovie.images?.poster?.[0]?.url;
+      if (poster) {
+        document.getElementById('nlDetailPosterUrl').value = poster;
+        activeMovie.selectedPoster = poster;
+        activeMovie.posterUrl = poster;
+        showNotice(`Poster fetched for "${activeMovie.title}". Click Apply Changes to confirm.`);
+        renderNewsletterPreview();
+      } else {
+        showNotice(`No poster found on TMDb for "${activeMovie.title}". You can paste a custom URL.`, 'error');
+      }
+    });
+  }
+
+  const btnFetchTrailer = document.getElementById('btnNlFetchTrailer');
+  if (btnFetchTrailer) {
+    btnFetchTrailer.addEventListener('click', async () => {
+      const activeMovie = state.movies.find(item => item.uid === state.selectedUid);
+      if (!activeMovie) {
+        showNotice('Please select a movie from the list first.', 'error');
+        return;
+      }
+      showNotice(`Fetching trailer for "${activeMovie.title}"...`);
+      if (!activeMovie.videos || activeMovie.videos.length === 0) {
+        await fetchMovieMetadata(activeMovie);
+      }
+      if (!activeMovie.videos || activeMovie.videos.length === 0) {
+        try {
+          const res = await fetch(`/api/youtube?q=${encodeURIComponent(activeMovie.title + ' ' + (activeMovie.year || '') + ' official trailer')}`);
+          const data = await res.json();
+          if (data.videos && data.videos.length > 0) {
+            activeMovie.videos = data.videos;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      const trailer = activeMovie.selectedTrailer || activeMovie.trailerUrl || activeMovie.videos?.[0]?.url;
+      if (trailer) {
+        document.getElementById('nlDetailTrailerUrl').value = trailer;
+        activeMovie.selectedTrailer = trailer;
+        activeMovie.trailerUrl = trailer;
+        showNotice(`Trailer fetched for "${activeMovie.title}". Click Apply Changes to confirm.`);
+        renderNewsletterPreview();
+      } else {
+        showNotice(`No trailer found for "${activeMovie.title}". You can paste a YouTube link manually.`, 'error');
+      }
+    });
+  }
+
+  const btnApplyChanges = document.getElementById('btnNlApplyChanges');
+  if (btnApplyChanges) {
+    btnApplyChanges.addEventListener('click', () => {
+      const activeMovie = state.movies.find(item => item.uid === state.selectedUid);
+      if (!activeMovie) {
+        showNotice('Please select a movie first.', 'error');
+        return;
+      }
+      activeMovie.title = document.getElementById('nlDetailTitle').value.trim() || activeMovie.title;
+      activeMovie.year = document.getElementById('nlDetailYear').value.trim();
+      activeMovie.language = document.getElementById('nlDetailLanguage').value.trim();
+      activeMovie.distributor = document.getElementById('nlDetailDistributor').value.trim();
+
+      const posterVal = document.getElementById('nlDetailPosterUrl').value.trim();
+      activeMovie.selectedPoster = posterVal;
+      activeMovie.posterUrl = posterVal;
+      const posterModeEl = document.getElementById('nlDetailPosterMode');
+      if (posterModeEl) activeMovie.posterMode = posterModeEl.value;
+
+      const trailerVal = document.getElementById('nlDetailTrailerUrl').value.trim();
+      activeMovie.selectedTrailer = trailerVal;
+      activeMovie.trailerUrl = trailerVal;
+      const trailerModeEl = document.getElementById('nlDetailTrailerMode');
+      if (trailerModeEl) activeMovie.trailerMode = trailerModeEl.value;
+
+      renderNewsletterMovieList();
+      updateAllUI();
+      renderNewsletterPreview();
+      showNotice(`Changes applied for "${activeMovie.title}". Preview updated.`);
+    });
+  }
+
+  const btnUpdatePreview = document.getElementById('btnNlUpdatePreview');
+  if (btnUpdatePreview) {
+    btnUpdatePreview.addEventListener('click', () => {
+      const activeMovie = state.movies.find(item => item.uid === state.selectedUid);
+      if (activeMovie) {
+        activeMovie.title = document.getElementById('nlDetailTitle').value.trim() || activeMovie.title;
+        activeMovie.year = document.getElementById('nlDetailYear').value.trim();
+        activeMovie.language = document.getElementById('nlDetailLanguage').value.trim();
+        activeMovie.distributor = document.getElementById('nlDetailDistributor').value.trim();
+        const pVal = document.getElementById('nlDetailPosterUrl').value.trim();
+        if (pVal) {
+          activeMovie.selectedPoster = pVal;
+          activeMovie.posterUrl = pVal;
+        }
+        const tVal = document.getElementById('nlDetailTrailerUrl').value.trim();
+        if (tVal) {
+          activeMovie.selectedTrailer = tVal;
+          activeMovie.trailerUrl = tVal;
+        }
+      }
+      renderNewsletterPreview();
+      showNotice('Newsletter live preview refreshed.');
+    });
+  }
+
   // Export Buttons
   document.getElementById('btnExportHTML').addEventListener('click', () => exportNewsletterHTML(false));
   document.getElementById('btnExportEmbeddedHTML').addEventListener('click', () => exportNewsletterHTML(true));
+
+  // Print PDF Button
+  const btnPrint = document.getElementById('btnPrintNewsletter');
+  if (btnPrint) {
+    btnPrint.addEventListener('click', printNewsletterPDF);
+  }
+}
+
+// Print Newsletter to PDF / Physical Printer directly from Iframe
+function printNewsletterPDF() {
+  const iframe = document.getElementById('nlIframePreview');
+  if (!iframe) {
+    showNotice('Newsletter preview iframe not found.', 'error');
+    return;
+  }
+  const targetWindow = iframe.contentWindow || iframe.contentDocument?.defaultView;
+  if (targetWindow) {
+    showNotice('Opening Print / PDF dialog...');
+    targetWindow.focus();
+    targetWindow.print();
+  } else {
+    showNotice('Could not access newsletter preview window.', 'error');
+  }
+}
+
+// Render Newsletter Movie List (Section 2)
+function renderNewsletterMovieList() {
+  const listBox = document.getElementById('nlMovieListBox');
+  if (!listBox) return;
+
+  if (!state.movies || state.movies.length === 0) {
+    listBox.innerHTML = '<div style="padding: 14px; text-align: center; color: #9CA3AF; font-size: 13px;">No movies in library. Add titles to see them here.</div>';
+    clearNewsletterMovieDetails();
+    return;
+  }
+
+  let activeMovie = state.movies.find(m => m.uid === state.selectedUid);
+  if (!activeMovie && state.movies.length > 0) {
+    state.selectedUid = state.movies[0].uid;
+    activeMovie = state.movies[0];
+  }
+
+  listBox.innerHTML = '';
+  state.movies.forEach(m => {
+    const item = document.createElement('div');
+    const isSelected = m.uid === state.selectedUid;
+    item.className = `nl-movie-item ${isSelected ? 'selected' : ''}`;
+    item.dataset.uid = m.uid;
+    item.setAttribute('role', 'option');
+    item.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+    item.textContent = `${m.title}${m.year ? ` (${m.year})` : ''}`;
+
+    item.addEventListener('click', () => {
+      state.selectedUid = m.uid;
+      renderNewsletterMovieList();
+      const current = state.movies.find(x => x.uid === m.uid);
+      populateNewsletterMovieDetails(current);
+    });
+
+    listBox.appendChild(item);
+  });
+
+  populateNewsletterMovieDetails(activeMovie);
+}
+
+// Populate Selected Movie Details (Section 3)
+function populateNewsletterMovieDetails(m) {
+  if (!m) {
+    clearNewsletterMovieDetails();
+    return;
+  }
+
+  const titleEl = document.getElementById('nlDetailTitle');
+  const yearEl = document.getElementById('nlDetailYear');
+  const langEl = document.getElementById('nlDetailLanguage');
+  const distEl = document.getElementById('nlDetailDistributor');
+  const posterEl = document.getElementById('nlDetailPosterUrl');
+  const posterModeEl = document.getElementById('nlDetailPosterMode');
+  const trailerEl = document.getElementById('nlDetailTrailerUrl');
+  const trailerModeEl = document.getElementById('nlDetailTrailerMode');
+
+  if (titleEl) titleEl.value = m.title || '';
+  if (yearEl) yearEl.value = m.year || '';
+  if (langEl) langEl.value = m.language || '';
+  if (distEl) distEl.value = m.distributor || '';
+  if (posterEl) posterEl.value = m.selectedPoster || m.posterUrl || m.images?.poster?.[0]?.url || '';
+  if (posterModeEl) posterModeEl.value = m.posterMode || 'auto';
+  if (trailerEl) trailerEl.value = m.selectedTrailer || m.trailerUrl || (m.videos && m.videos[0]?.url) || '';
+  if (trailerModeEl) trailerModeEl.value = m.trailerMode || 'auto';
+}
+
+// Clear Movie Details Fields
+function clearNewsletterMovieDetails() {
+  const fields = ['nlDetailTitle', 'nlDetailYear', 'nlDetailLanguage', 'nlDetailDistributor', 'nlDetailPosterUrl', 'nlDetailTrailerUrl'];
+  fields.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
 }
 
 function setupImageUpload(btnId, fileInputId, callback) {

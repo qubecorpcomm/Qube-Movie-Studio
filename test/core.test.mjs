@@ -29,8 +29,32 @@ test('parseMovieListText handles various list formats', () => {
   assert.equal(movies[2].title, 'Oppenheimer');
 });
 
-test('generateNewsletterHTML outputs HTML string', () => {
-  const html = generateNewsletterHTML([{ title: 'Dune', year: '2021', overview: 'Desert power' }]);
-  assert.ok(html.includes('Dune'));
-  assert.ok(html.includes('Desert power'));
+test('parseMovieListText handles Qube Wire OCR report format', () => {
+  const ocrReport = `
+Avengers Endgame: Encore (2026), English – IMAX 5
+Distributor: IMAX
+
+AvengEndgamEnc-IMX_FTR-L-2D_C_EN-EN-CCAP_INT-TD_IMAX5-HI-VI_4K_MRV_20260912_IMX_SMPTE_OV
+
+First Frame End Credits: 02:51:07
+First Frame Moving Credits: 02:56:55
+Feature Film Duration: 03:06:44
+  `;
+  const movies = parseMovieListText(ocrReport);
+  assert.equal(movies.length, 1);
+  assert.equal(movies[0].title, 'Avengers Endgame: Encore');
+  assert.equal(movies[0].year, '2026');
+  assert.equal(movies[0].distributor, 'IMAX');
+  assert.equal(movies[0].featureDuration, '03:06:44');
+  assert.equal(movies[0].firstFrameEndCredits, '02:51:07');
+});
+
+test('generateNewsletterHTML outputs HTML string with two-column layout', () => {
+  const htmlOne = generateNewsletterHTML([{ title: 'Dune', year: '2021' }], { layoutTemplate: 'one-column' });
+  assert.ok(htmlOne.includes('Dune'));
+
+  const htmlTwo = generateNewsletterHTML([{ title: 'Movie 1' }, { title: 'Movie 2' }], { layoutTemplate: 'two-column' });
+  assert.ok(htmlTwo.includes('Movie 1'));
+  assert.ok(htmlTwo.includes('Movie 2'));
+  assert.ok(htmlTwo.includes('width=\'50%\''));
 });

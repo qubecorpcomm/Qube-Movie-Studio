@@ -41,21 +41,95 @@ export async function imageBytes(value){
   const mime=r.headers.get('content-type')?.split(';')[0];if(!['image/jpeg','image/png','image/webp','image/gif'].includes(mime))throw fail('The address did not return an image.');
   let chunks=[],size=0;for await(const c of r.body){size+=c.length;if(size>LIMIT){throw fail('Image exceeds 10 MB.');}chunks.push(c);}return {buffer:Buffer.concat(chunks),mime};
 }
-async function dependency(name,env){return import(process.env[env]||name);}
+function fallbackPdfText(buffer) {
+  try {
+    const str = buffer.toString('latin1');
+    const textBlocks = [];
+    const regex = /\(([^()\\]|\\[\s\S])*\)\s*Tj|\[((?:\([^()\\]|\\[\s\S]*?\)|[^\]])*?)\]\s*TJ/g;
+    let match;
+    while ((match = regex.exec(str)) !== null) {
+      let raw = match[1] || match[2] || '';
+      raw = raw.replace(/\\([0-7]{1,3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
+               .replace(/\\(.)/g, '$1')
+               .replace(/\)\s*\(/g, ' ')
+               .replace(/[()]/g, '')
+               .trim();
+      if (raw.length > 1) textBlocks.push(raw);
+    }
+    return textBlocks.join('\n');
+  } catch {
+    return '';
+  }
+}
+
 async function pdfText(buffer){
-  let pdfjs;try{pdfjs=await dependency('pdfjs-dist/legacy/build/pdf.mjs','MOVIESTUDIO_PDF_MODULE');}catch{throw fail('PDF reader is not installed. Run npm install in web-app.',503);}
-  let doc;try{doc=await pdfjs.getDocument({data:new Uint8Array(buffer),useSystemFonts:true,isEvalSupported:false}).promise;if(doc.numPages>150)throw fail('PDF limit is 150 pages.');let text=[];
-    for(let i=1;i<=doc.numPages;i++){const page=await doc.getPage(i),content=await page.getTextContent(),lines=[];
-      for(const item of content.items){if(!('str'in item)||!item.str.trim())continue;let y=item.transform[5],line=lines.find(l=>Math.abs(l.y-y)<3);if(!line){line={y,items:[]};lines.push(line);}line.items.push(item);}
-      for(const line of lines.sort((a,b)=>b.y-a.y)){let end=null,s='';for(const item of line.items.sort((a,b)=>a.transform[4]-b.transform[4])){if(end!==null)s+=item.transform[4]-end>Math.max(12,item.height*1.2)?'\t':' ';s+=item.str;end=item.transform[4]+item.width;}text.push(s);}}
-    if(!text.join('').trim())throw fail('This PDF has no selectable text. Paste its text or use OCR first.');return text.join('\n');
-  }catch(e){if(e.status)throw e;throw fail('Could not read this PDF. Use an unlocked PDF with selectable text.');}finally{if(doc)await doc.destroy();}
+  let pdfjs;
+  try {
+    pdfjs = await dependency('pdfjs-dist/legacy/build/pdf.mjs','MOVIESTUDIO_PDF_MODULE');
+  } catch {
+    pdfjs = null;
+  }
+
+  if (pdfjs && pdfjs.getDocument) {
+    let doc;
+    try {
+      doc = await pdfjs.getDocument({
+        data: new Uint8Array(buffer),
+        useSystemFonts: true,
+        isEvalSupported: false,
+        disableFontFace: true
+      }).promise;
+      if (doc.numPages > 150) throw fail('PDF limit is 150 pages.');
+      let text = [];
+      for (let i = 1; i <= doc.numPages; i++) {
+        const page = await doc.getPage(i), content = await page.getTextContent(), lines = [];
+        for (const item of content.items) {
+          if (!('str' in item) || !item.str.trim()) continue;
+          let y = item.transform[5], line = lines.find(l => Math.abs(l.y - y) < 3);
+          if (!line) { line = { y, items: [] }; lines.push(line); }
+          line.items.push(item);
+        }
+        for (const line of lines.sort((a, b) => b.y - a.y)) {
+          let end = null, s = '';
+          for (const item of line.items.sort((a, b) => a.transform[4] - b.transform[4])) {
+            if (end !== null) s += item.transform[4] - end > Math.max(12, item.height * 1.2) ? '\t' : ' ';
+            s += item.str;
+            end = item.transform[4] + item.width;
+          }
+          text.push(s);
+        }
+      }
+      const extracted = text.join('\n').trim();
+      if (extracted) return extracted;
+    } catch {
+      // Fallback if pdfjs error
+    } finally {
+      if (doc) await doc.destroy().catch(() => {});
+    }
+  }
+
+  const fallback = fallbackPdfText(buffer);
+  if (fallback.trim()) return fallback;
+  throw fail('This PDF has no selectable text. Paste its text or use OCR first.');
 }
 export function createServer(){return http.createServer(async(req,res)=>{
   try{const u=new URL(req.url,'http://localhost');
     // API is same-origin. Prevent websites using a local server's credentials via browsers.
-    if(u.pathname.startsWith('/api/')&&req.headers.origin&&new URL(req.headers.origin).host!==req.headers.host)throw fail('Cross-origin request refused.',403);
+    if(u.pathname.startsWith('/api/')&&req.headers.origin){
+      const originHost=new URL(req.headers.origin).hostname;
+      const reqHost=(req.headers['x-forwarded-host']||req.headers.host||'').split(':')[0];
+      const isAllowed=originHost===reqHost||originHost==='localhost'||originHost==='127.0.0.1'||originHost.endsWith('.run.app')||originHost.endsWith('.google.com');
+      if(!isAllowed)throw fail('Cross-origin request refused.',403);
+    }
     if(req.method==='GET'&&u.pathname==='/api/status')return send(res,200,{tmdb:!!process.env.TMDB_API_KEY,youtube:!!process.env.YOUTUBE_API_KEY});
+    if(req.method==='GET'&&u.pathname==='/api/firebase-config'){
+      try {
+        const configData = await readFile(new URL('./firebase-applet-config.json', import.meta.url), 'utf8');
+        return send(res, 200, JSON.parse(configData));
+      } catch {
+        return send(res, 404, { error: 'Firebase config not found.' });
+      }
+    }
     if(req.method==='GET'&&u.pathname==='/api/search')return send(res,200,{results:await search(u)});
     const match=u.pathname.match(/^\/api\/movie\/(\d+)$/);
     if(req.method==='GET'&&match)return send(res,200,await detail(match[1],u.searchParams.get('language')));

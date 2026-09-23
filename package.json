@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Movie artwork, trailers and newsletter workspace",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs",
     "dev": "node --env-file-if-exists=.env server.mjs",
@@ -12,5 +14,9 @@
     "lint": "node --check server.mjs public/core.mjs public/app.mjs",
     "test": "node --test"
   },
-  "dependencies": { "pdfjs-dist": "5.6.205", "jszip": "3.10.1" }
+  "dependencies": {
+    "firebase": "^12.19.0",
+    "jszip": "3.10.1",
+    "pdfjs-dist": "5.6.205"
+  }
 }
