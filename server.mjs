@@ -278,7 +278,12 @@ export async function handleRequest(req, res) {
   try {
     const hostHeader = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
     const proto = req.headers['x-forwarded-proto'] || 'http';
-    const u = new URL(req.url, `${proto}://${hostHeader}`);
+    let reqUrl = req.url || '/';
+    const matchedPath = req.headers['x-matched-path'] || req.headers['x-forwarded-uri'] || req.headers['x-original-url'];
+    if (matchedPath && !matchedPath.includes('index.mjs') && !matchedPath.includes('.mjs')) {
+      reqUrl = matchedPath;
+    }
+    const u = new URL(reqUrl, `${proto}://${hostHeader}`);
 
     // API is same-origin. Prevent websites using a local server's credentials via browsers.
     if (u.pathname.startsWith('/api/') && req.headers.origin) {

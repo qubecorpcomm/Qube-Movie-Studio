@@ -1,11 +1,13 @@
 {
   "version": 2,
   "functions": {
-    "api/index.mjs": {
+    "api/*.mjs": {
       "includeFiles": "public/**,firebase-applet-config.json"
     }
   },
   "rewrites": [
+    { "source": "/api/pdf", "destination": "/api/pdf.mjs" },
+    { "source": "/api/status", "destination": "/api/status.mjs" },
     { "source": "/api/(.*)", "destination": "/api/index.mjs" },
     { "source": "/api", "destination": "/api/index.mjs" },
     { "source": "/(.*)", "destination": "/api/index.mjs" }

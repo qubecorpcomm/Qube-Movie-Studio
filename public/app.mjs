@@ -1633,6 +1633,84 @@ function closeConfirmModal() {
 }
 
 // File Import Handler strictly targeted per tool
+async function extractPdfTextClient(file) {
+  // Method 1: Client-side PDF.js parsing
+  try {
+    if (!window.pdfjsLib) {
+      await new Promise((resolve) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        script.onload = () => resolve();
+        script.onerror = () => resolve();
+        setTimeout(resolve, 2000);
+        document.head.appendChild(script);
+      });
+    }
+
+    if (window.pdfjsLib) {
+      if (window.pdfjsLib.GlobalWorkerOptions && !window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+      const textLines = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const lines = [];
+        for (const item of textContent.items) {
+          if (!('str' in item) || !item.str.trim()) continue;
+          let y = item.transform[5], line = lines.find(l => Math.abs(l.y - y) < 3);
+          if (!line) { line = { y, items: [] }; lines.push(line); }
+          line.items.push(item);
+        }
+        for (const line of lines.sort((a, b) => b.y - a.y)) {
+          let end = null, s = '';
+          for (const item of line.items.sort((a, b) => a.transform[4] - b.transform[4])) {
+            if (end !== null) s += item.transform[4] - end > Math.max(12, item.height * 1.2) ? '\t' : ' ';
+            s += item.str;
+            end = item.transform[4] + item.width;
+          }
+          textLines.push(s);
+        }
+      }
+      const fullText = textLines.join('\n').trim();
+      if (fullText && fullText.length > 15) return fullText;
+    }
+  } catch (err) {
+    console.warn('In-browser PDF.js parse skipped:', err);
+  }
+
+  // Method 2: Fast PDF text stream extractor
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let str = '';
+    const maxBytes = Math.min(bytes.length, 6 * 1024 * 1024);
+    for (let i = 0; i < maxBytes; i++) {
+      str += String.fromCharCode(bytes[i]);
+    }
+    const textBlocks = [];
+    const regex = /\(([^()\\]|\\[\s\S])*\)\s*Tj|\[((?:\([^()\\]|\\[\s\S]*?\)|[^\]])*?)\]\s*TJ/g;
+    let match;
+    while ((match = regex.exec(str)) !== null) {
+      let raw = match[1] || match[2] || '';
+      raw = raw.replace(/\\([0-7]{1,3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
+               .replace(/\\(.)/g, '$1')
+               .replace(/\)\s*\(/g, ' ')
+               .replace(/[()]/g, '')
+               .trim();
+      if (raw.length > 1) textBlocks.push(raw);
+    }
+    const fallback = textBlocks.join('\n').trim();
+    if (fallback && fallback.length > 25) return fallback;
+  } catch (err) {
+    console.warn('Fast PDF text stream parser failed:', err);
+  }
+
+  return null;
+}
+
 async function handleFileImport(e, toolTarget) {
   const file = e.target.files[0];
   if (!file) return;
@@ -1658,27 +1736,37 @@ async function handleFileImport(e, toolTarget) {
         }
       }
 
-      const buffer = await file.arrayBuffer();
-      const res = await fetch('/api/pdf', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/pdf' },
-        body: buffer
-      });
-      const contentType = res.headers.get('content-type') || '';
-      let data = {};
-      if (contentType.includes('application/json')) {
-        data = await res.json();
-      } else {
-        const rawErr = await res.text();
-        throw new Error(`Server returned ${res.status}: ${rawErr.replace(/<[^>]*>?/gm, '').trim().slice(0, 80)}`);
+      // Step 1: Try instant in-browser client-side extraction
+      try {
+        text = await extractPdfTextClient(file);
+      } catch (err) {
+        console.warn('Client extraction error:', err);
       }
-      if (!res.ok) {
-        if (data.error && data.error.includes('OCR')) {
-          throw new Error('This PDF has no selectable text (scan). It needs OCR first.');
+
+      // Step 2: Fall back to backend /api/pdf endpoint if client-side did not get text
+      if (!text || text.trim().length < 15) {
+        const buffer = await file.arrayBuffer();
+        const res = await fetch('/api/pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/pdf' },
+          body: buffer
+        });
+        const contentType = res.headers.get('content-type') || '';
+        let data = {};
+        if (contentType.includes('application/json')) {
+          data = await res.json();
+        } else {
+          const rawErr = await res.text();
+          throw new Error(`Server returned ${res.status}: ${rawErr.replace(/<[^>]*>?/gm, '').trim().slice(0, 80)}`);
         }
-        throw new Error(data.error || 'Failed to extract text from PDF.');
+        if (!res.ok) {
+          if (data.error && data.error.includes('OCR')) {
+            throw new Error('This PDF has no selectable text (scanned image). Please use selectable text or OCR first.');
+          }
+          throw new Error(data.error || 'Failed to extract text from PDF.');
+        }
+        text = data.text || '';
       }
-      text = data.text || '';
     } else {
       text = await file.text();
     }
