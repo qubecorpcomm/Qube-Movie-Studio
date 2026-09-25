@@ -15,30 +15,40 @@ async function api(url){
   if(!r.ok)throw fail(r.status===401?'TMDB rejected the API key.':r.status===429?'Service rate limit reached. Please retry shortly.':r.status===403?'Service access or quota limit reached.':`Movie service returned ${r.status}.`,502);
   const value=await r.json();if(cache.size>=200)cache.delete(cache.keys().next().value);cache.set(key,{value,expires:Date.now()+300000});return value;
 }
-function tmdb(path,params={}){if(!process.env.TMDB_API_KEY)throw fail('Set TMDB_API_KEY in the server environment to enable movie search.',503);const u=new URL('https://api.themoviedb.org/3'+path);u.searchParams.set('api_key',process.env.TMDB_API_KEY);for(const[k,v]of Object.entries(params))if(v)u.searchParams.set(k,v);return api(u);}
-async function search(u){const title=(u.searchParams.get('q')||'').slice(0,180),year=u.searchParams.get('year')||'',hint=langCode(u.searchParams.get('language')),imdb=title.match(/tt\d{7,10}/)?.[0];if(!title.trim())throw fail('Enter a movie title.');let results;
-  if(imdb)results=(await tmdb('/find/'+imdb,{external_source:'imdb_id'})).movie_results||[];
+function tmdb(path, params = {}, customApiKey = null) {
+  const apiKey = (customApiKey || process.env.TMDB_API_KEY || '').trim();
+  if (!apiKey) throw fail('Set TMDB_API_KEY or enter your API key in Connection Details to enable movie search.', 503);
+  const u = new URL('https://api.themoviedb.org/3' + path);
+  u.searchParams.set('api_key', apiKey);
+  for (const [k, v] of Object.entries(params)) if (v) u.searchParams.set(k, v);
+  return api(u);
+}
+async function search(u, customApiKey = null) {
+  const title = (u.searchParams.get('q') || '').slice(0, 180), year = u.searchParams.get('year') || '', hint = langCode(u.searchParams.get('language')), imdb = title.match(/tt\d{7,10}/)?.[0];
+  if (!title.trim()) throw fail('Enter a movie title.');
+  let results;
+  if (imdb) results = (await tmdb('/find/' + imdb, { external_source: 'imdb_id' }, customApiKey)).movie_results || [];
   else {
-    results=(await tmdb('/search/movie',{query:title,year,include_adult:'false'})).results||[];
-    if(!results.length&&year)results=(await tmdb('/search/movie',{query:title,include_adult:'false'})).results||[];
-    if(!results.length){
-      const cleaned=title.replace(/[:\-–—]\s*(encore|re-release|re-issue|imax|scope|flat|infinity\s*vision|part\s*\d+).*$/i,'').trim();
-      if(cleaned&&cleaned!==title){
-        results=(await tmdb('/search/movie',{query:cleaned,year,include_adult:'false'})).results||[];
-        if(!results.length&&year)results=(await tmdb('/search/movie',{query:cleaned,include_adult:'false'})).results||[];
+    results = (await tmdb('/search/movie', { query: title, year, include_adult: 'false' }, customApiKey)).results || [];
+    if (!results.length && year) results = (await tmdb('/search/movie', { query: title, include_adult: 'false' }, customApiKey)).results || [];
+    if (!results.length) {
+      const cleaned = title.replace(/[:\-–—]\s*(encore|re-release|re-issue|imax|scope|flat|infinity\s*vision|part\s*\d+).*$/i, '').trim();
+      if (cleaned && cleaned !== title) {
+        results = (await tmdb('/search/movie', { query: cleaned, year, include_adult: 'false' }, customApiKey)).results || [];
+        if (!results.length && year) results = (await tmdb('/search/movie', { query: cleaned, include_adult: 'false' }, customApiKey)).results || [];
       }
     }
-    if(!results.length&&/[:\-–—]/.test(title)){
-      const primary=title.split(/[:\-–—]/)[0].trim();
-      if(primary.length>2&&primary!==title){
-        results=(await tmdb('/search/movie',{query:primary,year,include_adult:'false'})).results||[];
-        if(!results.length&&year)results=(await tmdb('/search/movie',{query:primary,include_adult:'false'})).results||[];
+    if (!results.length && /[:\-–—]/.test(title)) {
+      const primary = title.split(/[:\-–—]/)[0].trim();
+      if (primary.length > 2 && primary !== title) {
+        results = (await tmdb('/search/movie', { query: primary, year, include_adult: 'false' }, customApiKey)).results || [];
+        if (!results.length && year) results = (await tmdb('/search/movie', { query: primary, include_adult: 'false' }, customApiKey)).results || [];
       }
     }
-    if(!results.length){
+    if (!results.length) {
       try {
-        const multi = (await tmdb('/search/multi',{query:title,include_adult:'false'})).results||[];
-        results = multi.map(item=>({
+        const multi = (await tmdb('/search/multi', { query: title, include_adult: 'false' }, customApiKey)).results || [];
+        results = multi.map(item => ({
           ...item,
           title: item.title || item.name || '',
           release_date: item.release_date || item.first_air_date || ''
@@ -46,17 +56,26 @@ async function search(u){const title=(u.searchParams.get('q')||'').slice(0,180),
       } catch {}
     }
   }
-  const score=(m,i)=>20-i*3+([m.title,m.original_title].some(t=>norm(t)===norm(title))?50:0)+(year&&m.release_date?.startsWith(year)?30:0)+(hint&&hint===m.original_language?25:0);
-  return results.slice(0,12).map((m,i)=>({...m,score:score(m,i)})).sort((a,b)=>b.score-a.score);
+  const score = (m, i) => 20 - i * 3 + ([m.title, m.original_title].some(t => norm(t) === norm(title)) ? 50 : 0) + (year && m.release_date?.startsWith(year) ? 30 : 0) + (hint && hint === m.original_language ? 25 : 0);
+  return results.slice(0, 12).map((m, i) => ({ ...m, score: score(m, i) })).sort((a, b) => b.score - a.score);
 }
-async function detail(id,language){
-  const m=await tmdb('/movie/'+id,{append_to_response:'images,videos',include_image_language:[langCode(language),'en','null'].filter(Boolean).join(',')});
-  const target=langCode(language)||m.original_language;
+async function detail(id, language, customApiKey = null) {
+  const m = await tmdb('/movie/' + id, { append_to_response: 'images,videos', include_image_language: [langCode(language), 'en', 'null'].filter(Boolean).join(',') }, customApiKey);
+  const target = langCode(language) || m.original_language;
   // Fetch all image/video languages; rank original language ahead of fallbacks.
-  const [images,videos]=await Promise.all([tmdb(`/movie/${id}/images`),tmdb(`/movie/${id}/videos`,{language:target})]);
-  let all=[...(videos.results||[]),...(m.videos?.results||[])];const seen=new Set();all=all.filter(v=>v.site==='YouTube'&&['Trailer','Teaser'].includes(v.type)&&!seen.has(v.key)&&seen.add(v.key));
-  all=all.map(v=>({...v,url:youtubeURL(v.key),score:(v.iso_639_1===target?100:0)+(v.official?25:0)+(v.type==='Trailer'?10:0)})).filter(v=>v.url).sort((a,b)=>b.score-a.score);
-  return {movie:{id:m.id,title:m.title,year:m.release_date?.slice(0,4)||'',original_language:m.original_language,imdb_id:m.imdb_id,overview:m.overview},images:{poster:rankImages(images.posters||[],'poster',target,m.original_language),backdrop:rankImages(images.backdrops||[],'backdrop',target,m.original_language),logo:rankImages(images.logos||[],'logo',target,m.original_language)},videos:all};
+  const [images, videos] = await Promise.all([
+    tmdb(`/movie/${id}/images`, {}, customApiKey),
+    tmdb(`/movie/${id}/videos`, { language: target }, customApiKey)
+  ]);
+  let all = [...(videos.results || []), ...(m.videos?.results || [])];
+  const seen = new Set();
+  all = all.filter(v => v.site === 'YouTube' && ['Trailer', 'Teaser'].includes(v.type) && !seen.has(v.key) && seen.add(v.key));
+  all = all.map(v => ({ ...v, url: youtubeURL(v.key), score: (v.iso_639_1 === target ? 100 : 0) + (v.official ? 25 : 0) + (v.type === 'Trailer' ? 10 : 0) })).filter(v => v.url).sort((a, b) => b.score - a.score);
+  return {
+    movie: { id: m.id, title: m.title, year: m.release_date?.slice(0, 4) || '', original_language: m.original_language, imdb_id: m.imdb_id, overview: m.overview },
+    images: { poster: rankImages(images.posters || [], 'poster', target, m.original_language), backdrop: rankImages(images.backdrops || [], 'backdrop', target, m.original_language), logo: rankImages(images.logos || [], 'logo', target, m.original_language) },
+    videos: all
+  };
 }
 export async function imageBytes(value){
   if(typeof value!=='string')throw fail('Invalid image.');
@@ -79,14 +98,16 @@ async function dependency(pkg) {
 let youtubeQuotaExceeded = false;
 const youtubeCache = new Map();
 
-async function fetchMovieAssets(title, year, language) {
+async function fetchMovieAssets(title, year, language, customTmdbKey = null, customYtKey = null) {
   let poster_remote = '';
   let tmdb_id = null;
   let trailer_url = '';
+  const effectiveTmdb = (customTmdbKey || process.env.TMDB_API_KEY || '').trim();
+  const effectiveYt = (customYtKey || process.env.YOUTUBE_API_KEY || '').trim();
 
   if (title) {
     // 1. Multi-tier TMDB Search Strategy (Exact -> No Year -> Cleaned Base Title)
-    if (process.env.TMDB_API_KEY) {
+    if (effectiveTmdb) {
       const cleanTitle = title.replace(/[:\-–—]\s*(encore|re-release|re-issue|imax|scope|flat|infinity\s*vision|part\s*\d+).*$/i, '').trim();
       const searchQueries = [
         { q: title, year },
@@ -101,7 +122,7 @@ async function fetchMovieAssets(title, year, language) {
           u.searchParams.set('q', queryObj.q);
           if (queryObj.year) u.searchParams.set('year', queryObj.year);
           if (language) u.searchParams.set('language', language);
-          const results = await search(u);
+          const results = await search(u, effectiveTmdb);
           if (results && results.length > 0) {
             const top = results[0];
             if (!tmdb_id) tmdb_id = top.id;
@@ -109,7 +130,7 @@ async function fetchMovieAssets(title, year, language) {
               poster_remote = `https://image.tmdb.org/t/p/w500${top.poster_path}`;
             }
             try {
-              const det = await detail(top.id, language);
+              const det = await detail(top.id, language, effectiveTmdb);
               if (!trailer_url && det.videos && det.videos.length > 0) {
                 trailer_url = det.videos[0].url;
               }
@@ -127,7 +148,7 @@ async function fetchMovieAssets(title, year, language) {
     }
 
     // 2. YouTube Search for Trailer
-    if (!trailer_url && process.env.YOUTUBE_API_KEY && !youtubeQuotaExceeded) {
+    if (!trailer_url && effectiveYt && !youtubeQuotaExceeded) {
       const q = (title + (year ? ' ' + year : '')).trim().toLowerCase();
       if (youtubeCache.has(q)) {
         const cached = youtubeCache.get(q);
@@ -135,7 +156,7 @@ async function fetchMovieAssets(title, year, language) {
       } else {
         try {
           const url = new URL('https://www.googleapis.com/youtube/v3/search');
-          url.search = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '1', q: title + ' official trailer', key: process.env.YOUTUBE_API_KEY });
+          url.search = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '1', q: title + ' official trailer', key: effectiveYt });
           const d = await api(url);
           const videos = (d.items || []).map(v => ({ name: v.snippet.title, url: youtubeURL(v.id.videoId), type: 'YouTube search' }));
           youtubeCache.set(q, videos);
@@ -293,8 +314,53 @@ export async function handleRequest(req, res) {
       if (!isAllowed) throw fail('Cross-origin request refused.', 403);
     }
 
+    const clientTmdbKey = (req.headers['x-tmdb-api-key'] || u.searchParams.get('tmdb_key') || '').trim();
+    const clientYtKey = (req.headers['x-youtube-api-key'] || u.searchParams.get('yt_key') || '').trim();
+    const effectiveTmdbKey = clientTmdbKey || (process.env.TMDB_API_KEY || '').trim();
+    const effectiveYtKey = clientYtKey || (process.env.YOUTUBE_API_KEY || '').trim();
+
     if (req.method === 'GET' && u.pathname === '/api/status') {
-      return send(res, 200, { tmdb: !!process.env.TMDB_API_KEY, youtube: !!process.env.YOUTUBE_API_KEY });
+      return send(res, 200, {
+        tmdb: !!effectiveTmdbKey,
+        youtube: !!effectiveYtKey,
+        tmdbSource: clientTmdbKey ? 'client' : (process.env.TMDB_API_KEY ? 'server' : 'none'),
+        youtubeSource: clientYtKey ? 'client' : (process.env.YOUTUBE_API_KEY ? 'server' : 'none')
+      });
+    }
+
+    if (req.method === 'POST' && u.pathname === '/api/test-keys') {
+      const b = await jsonBody(req).catch(() => ({}));
+      const testTmdb = (b.tmdbKey || effectiveTmdbKey || '').trim();
+      const testYt = (b.youtubeKey || effectiveYtKey || '').trim();
+      let tmdbValid = false, tmdbMessage = '';
+      if (testTmdb) {
+        try {
+          const testRes = await fetch(`https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(testTmdb)}`);
+          if (testRes.ok) {
+            tmdbValid = true;
+            tmdbMessage = 'TMDB API key is valid & working!';
+          } else {
+            tmdbMessage = testRes.status === 401 ? 'Invalid TMDB API key' : `TMDB HTTP ${testRes.status}`;
+          }
+        } catch (err) {
+          tmdbMessage = err.message;
+        }
+      }
+      let ytValid = false, ytMessage = '';
+      if (testYt) {
+        try {
+          const testRes = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=1&q=test&key=${encodeURIComponent(testYt)}`);
+          if (testRes.ok) {
+            ytValid = true;
+            ytMessage = 'YouTube API key is valid & working!';
+          } else {
+            ytMessage = testRes.status === 400 || testRes.status === 403 ? 'Invalid or restricted YouTube key' : `YouTube HTTP ${testRes.status}`;
+          }
+        } catch (err) {
+          ytMessage = err.message;
+        }
+      }
+      return send(res, 200, { tmdbValid, tmdbMessage, ytValid, ytMessage });
     }
 
     if (req.method === 'GET' && u.pathname === '/api/firebase-config') {
@@ -312,29 +378,29 @@ export async function handleRequest(req, res) {
     }
 
     if (req.method === 'GET' && u.pathname === '/api/search') {
-      return send(res, 200, { results: await search(u) });
+      return send(res, 200, { results: await search(u, effectiveTmdbKey) });
     }
 
     const match = u.pathname.match(/^\/api\/movie\/(\d+)$/);
     if (req.method === 'GET' && match) {
-      return send(res, 200, await detail(match[1], u.searchParams.get('language')));
+      return send(res, 200, await detail(match[1], u.searchParams.get('language'), effectiveTmdbKey));
     }
 
     if (req.method === 'GET' && u.pathname === '/api/fetch-movie-assets') {
       const title = u.searchParams.get('title') || '';
       const year = u.searchParams.get('year') || '';
       const lang = u.searchParams.get('language') || '';
-      return send(res, 200, await fetchMovieAssets(title, year, lang));
+      return send(res, 200, await fetchMovieAssets(title, year, lang, effectiveTmdbKey, effectiveYtKey));
     }
 
     if (req.method === 'GET' && u.pathname === '/api/youtube') {
       if (youtubeQuotaExceeded) throw fail('YouTube API quota reached for this session. Use manual trailer links.', 403);
-      if (!process.env.YOUTUBE_API_KEY) throw fail('Optional YouTube search needs YOUTUBE_API_KEY.', 503);
+      if (!effectiveYtKey) throw fail('Optional YouTube search needs YOUTUBE_API_KEY.', 503);
       const q = (u.searchParams.get('q') || '').trim().toLowerCase().slice(0, 200);
       if (!q) throw fail('Enter a search title.');
       if (youtubeCache.has(q)) return send(res, 200, { videos: youtubeCache.get(q) });
       const url = new URL('https://www.googleapis.com/youtube/v3/search');
-      url.search = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '6', q: q + ' official trailer', key: process.env.YOUTUBE_API_KEY });
+      url.search = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '6', q: q + ' official trailer', key: effectiveYtKey });
       try {
         const d = await api(url);
         const videos = (d.items || []).map(v => ({ name: v.snippet.title, url: youtubeURL(v.id.videoId), type: 'YouTube search', iso_639_1: '' }));

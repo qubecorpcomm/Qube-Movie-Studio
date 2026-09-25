@@ -557,39 +557,58 @@
     </div>
   </div>
 
-  <!-- CONNECTION DETAILS MODAL -->
+  <!-- CONNECTION DETAILS / API KEY PANEL MODAL -->
   <dialog id="connModal" class="app-modal">
-    <div class="modal-content">
+    <div class="modal-content" style="max-width: 520px;">
       <div class="modal-header">
-        <h3 class="modal-title">Connect your movie services</h3>
+        <h3 class="modal-title">API Keys &amp; Services</h3>
         <button class="btn-close" id="btnCloseConnModal" aria-label="Close dialog">&times;</button>
       </div>
       <div class="modal-body">
         <div class="modal-status-line" id="modalStatusLine">
           TMDB: Checking… · YouTube: Checking…
         </div>
-        <p class="modal-description">
-          <strong>TMDB_API_KEY</strong> is required for live title search, artwork, and metadata retrieval. <strong>YOUTUBE_API_KEY</strong> is optional for automated trailer discovery.
-        </p>
 
-        <div style="background: #F4F7F4; border: 1px solid var(--card-border); border-radius: 8px; padding: 14px; margin-top: 14px; font-size: 12px; line-height: 1.6;">
-          <div style="font-weight: 700; margin-bottom: 6px; color: var(--body-text);">How to add your API Key in Vercel:</div>
-          <ol style="margin-left: 18px; padding-left: 0; color: #4B5563;">
-            <li>Get a free API key from <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer" style="color: var(--primary-green); font-weight: 600; text-decoration: underline;">themoviedb.org</a> (v3 API key).</li>
-            <li>Open your <a href="https://vercel.com/dashboard" target="_blank" rel="noopener noreferrer" style="color: var(--primary-green); font-weight: 600; text-decoration: underline;">Vercel Project Dashboard</a>.</li>
-            <li>Navigate to <strong>Settings</strong> &rarr; <strong>Environment Variables</strong>.</li>
-            <li>Add variable name <code>TMDB_API_KEY</code> and paste your key.</li>
-            <li>(Optional) Add <code>YOUTUBE_API_KEY</code> for automated YouTube trailer lookups.</li>
-            <li>Go to <strong>Deployments</strong> &rarr; click <strong>Redeploy</strong> to apply changes.</li>
-          </ol>
-        </div>
+        <form id="apiKeysForm" onsubmit="return false;" style="margin-top: 14px; display: flex; flex-direction: column; gap: 14px;">
+          <!-- TMDB API Key -->
+          <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+            <label for="inputTmdbApiKey" style="display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 13px; color: var(--body-text);">
+              <span>TMDB API Key (v3 auth)</span>
+              <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer" style="font-size: 11px; color: var(--primary-green); text-decoration: underline;">Get free key &rarr;</a>
+            </label>
+            <div style="position: relative; display: flex; align-items: center;">
+              <input type="password" id="inputTmdbApiKey" class="form-control" placeholder="Paste 32-character TMDB API key..." style="width: 100%; padding-right: 64px; font-family: monospace; font-size: 13px;" autocomplete="off" />
+              <button type="button" class="btn btn-ghost btn-xs" id="btnToggleTmdbKey" style="position: absolute; right: 6px; font-size: 11px; padding: 2px 8px; color: var(--muted-text);">Show</button>
+            </div>
+            <p style="font-size: 11px; color: var(--muted-text); margin: 0;">Required for live title search, movie posters, backdrops, and metadata.</p>
+          </div>
 
-        <p class="modal-note" style="margin-top: 12px;">
-          <em>Note:</em> Manual editing, project imports, PDF extraction, and email newsletter export work seamlessly without API keys.
+          <!-- YouTube API Key -->
+          <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+            <label for="inputYtApiKey" style="display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 13px; color: var(--body-text);">
+              <span>YouTube Data API Key <span style="font-weight: 400; color: var(--muted-text);">(Optional)</span></span>
+              <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" style="font-size: 11px; color: var(--primary-green); text-decoration: underline;">Google Cloud &rarr;</a>
+            </label>
+            <div style="position: relative; display: flex; align-items: center;">
+              <input type="password" id="inputYtApiKey" class="form-control" placeholder="Paste YouTube Data API key (AIzaSy...)..." style="width: 100%; padding-right: 64px; font-family: monospace; font-size: 13px;" autocomplete="off" />
+              <button type="button" class="btn btn-ghost btn-xs" id="btnToggleYtKey" style="position: absolute; right: 6px; font-size: 11px; padding: 2px 8px; color: var(--muted-text);">Show</button>
+            </div>
+            <p style="font-size: 11px; color: var(--muted-text); margin: 0;">Optional for automated trailer searches. If left empty, trailers use TMDB links &amp; manual links.</p>
+          </div>
+
+          <div id="apiKeysNotice" class="hidden" style="padding: 10px 12px; border-radius: 6px; font-size: 12px; line-height: 1.4;"></div>
+        </form>
+
+        <p class="modal-note" style="margin-top: 12px; font-size: 11px; color: var(--muted-text);">
+          <em>Note:</em> Keys entered here are stored in your secure browser workspace so you don't have to re-enter them.
         </p>
       </div>
-      <div class="modal-footer">
-        <button class="btn btn-primary" id="btnDoneConnModal">Done</button>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <button class="btn btn-secondary btn-sm" id="btnClearApiKeys" type="button">Clear</button>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary" id="btnCancelConnModal" type="button">Cancel</button>
+          <button class="btn btn-primary" id="btnSaveApiKeys" type="button">Save &amp; Connect</button>
+        </div>
       </div>
     </div>
   </dialog>

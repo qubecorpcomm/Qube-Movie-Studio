@@ -138,6 +138,16 @@ function loadLocalState() {
   }
 }
 
+// API Fetch Wrapper attaching user-configured keys
+export function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const tmdbKey = (localStorage.getItem('user_tmdb_api_key') || '').trim();
+  const ytKey = (localStorage.getItem('user_youtube_api_key') || '').trim();
+  if (tmdbKey) headers.set('x-tmdb-api-key', tmdbKey);
+  if (ytKey) headers.set('x-youtube-api-key', ytKey);
+  return fetch(url, { ...options, headers });
+}
+
 // API Connection Status
 async function checkAPIStatus() {
   const statusDot = document.querySelector('.status-dot');
@@ -145,23 +155,27 @@ async function checkAPIStatus() {
   const modalStatusLine = document.getElementById('modalStatusLine');
 
   try {
-    const res = await fetch('/api/status');
+    const res = await apiFetch('/api/status');
     const data = await res.json();
     state.status = data;
 
     if (data.tmdb) {
-      statusDot.className = 'status-dot';
-      statusText.textContent = 'TMDB connected';
-      modalStatusLine.textContent = `TMDB: Configured ✅ · YouTube: ${data.youtube ? 'Configured ✅' : 'Not configured'}`;
+      if (statusDot) statusDot.className = 'status-dot';
+      if (statusText) statusText.textContent = data.tmdbSource === 'client' ? 'TMDB connected (Custom Key)' : 'TMDB connected';
+      if (modalStatusLine) {
+        modalStatusLine.textContent = `TMDB: Connected ✅ (${data.tmdbSource === 'client' ? 'Custom key' : 'Active'}) · YouTube: ${data.youtube ? 'Connected ✅' : 'Optional (Not added)'}`;
+      }
     } else {
-      statusDot.className = 'status-dot offline';
-      statusText.textContent = 'Manual mode · add API keys';
-      modalStatusLine.textContent = 'TMDB: Key missing (Offline Mode) · YouTube: Key missing';
+      if (statusDot) statusDot.className = 'status-dot offline';
+      if (statusText) statusText.textContent = 'Manual mode · enter API key';
+      if (modalStatusLine) {
+        modalStatusLine.textContent = 'TMDB: Key missing (Enter key below) · YouTube: Optional';
+      }
     }
   } catch {
-    statusDot.className = 'status-dot offline';
-    statusText.textContent = 'Server unavailable';
-    modalStatusLine.textContent = 'Server could not be reached.';
+    if (statusDot) statusDot.className = 'status-dot offline';
+    if (statusText) statusText.textContent = 'Server unavailable';
+    if (modalStatusLine) modalStatusLine.textContent = 'Server could not be reached.';
   }
 }
 
@@ -320,10 +334,29 @@ async function saveUserProfile(user) {
       email: user.email || '',
       displayName: user.displayName || user.email || 'User',
       photoURL: user.photoURL || '',
-      createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
+    const localTmdb = (localStorage.getItem('user_tmdb_api_key') || '').trim();
+    const localYt = (localStorage.getItem('user_youtube_api_key') || '').trim();
+    if (localTmdb) profile.custom_tmdb_key = localTmdb;
+    if (localYt) profile.custom_yt_key = localYt;
+
     await setDoc(userDocRef, profile, { merge: true });
+
+    // If local has no keys, try fetching from Firestore profile
+    if (!localTmdb) {
+      try {
+        const snap = await getDocFromServer(userDocRef);
+        if (snap.exists()) {
+          const d = snap.data();
+          if (d.custom_tmdb_key) {
+            localStorage.setItem('user_tmdb_api_key', d.custom_tmdb_key);
+            if (d.custom_yt_key) localStorage.setItem('user_youtube_api_key', d.custom_yt_key);
+            checkAPIStatus();
+          }
+        }
+      } catch {}
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -764,13 +797,180 @@ function setupEventHandlers() {
   const btnZip = document.getElementById('btnDownloadZipTop');
   if (btnZip) btnZip.addEventListener('click', downloadArtworkZIP);
 
-  // Modals setup
+  // API Key & Connection Modal setup
   const connModal = document.getElementById('connModal');
-  document.getElementById('btnConnDetails').addEventListener('click', () => {
-    connModal.showModal();
-  });
-  document.getElementById('btnCloseConnModal').addEventListener('click', () => connModal.close());
-  document.getElementById('btnDoneConnModal').addEventListener('click', () => connModal.close());
+  const btnConnDetails = document.getElementById('btnConnDetails');
+  const btnCloseConnModal = document.getElementById('btnCloseConnModal');
+  const btnCancelConnModal = document.getElementById('btnCancelConnModal');
+  const btnSaveApiKeys = document.getElementById('btnSaveApiKeys');
+  const btnClearApiKeys = document.getElementById('btnClearApiKeys');
+  const inputTmdbApiKey = document.getElementById('inputTmdbApiKey');
+  const inputYtApiKey = document.getElementById('inputYtApiKey');
+  const btnToggleTmdbKey = document.getElementById('btnToggleTmdbKey');
+  const btnToggleYtKey = document.getElementById('btnToggleYtKey');
+  const apiKeysNotice = document.getElementById('apiKeysNotice');
+
+  function syncKeyInputs() {
+    if (inputTmdbApiKey) inputTmdbApiKey.value = (localStorage.getItem('user_tmdb_api_key') || '').trim();
+    if (inputYtApiKey) inputYtApiKey.value = (localStorage.getItem('user_youtube_api_key') || '').trim();
+    if (apiKeysNotice) {
+      apiKeysNotice.className = 'hidden';
+      apiKeysNotice.textContent = '';
+    }
+  }
+
+  if (btnConnDetails && connModal) {
+    btnConnDetails.addEventListener('click', () => {
+      syncKeyInputs();
+      connModal.showModal();
+    });
+  }
+
+  if (btnCloseConnModal && connModal) {
+    btnCloseConnModal.addEventListener('click', () => connModal.close());
+  }
+
+  if (btnCancelConnModal && connModal) {
+    btnCancelConnModal.addEventListener('click', () => connModal.close());
+  }
+
+  if (btnToggleTmdbKey && inputTmdbApiKey) {
+    btnToggleTmdbKey.addEventListener('click', () => {
+      if (inputTmdbApiKey.type === 'password') {
+        inputTmdbApiKey.type = 'text';
+        btnToggleTmdbKey.textContent = 'Hide';
+      } else {
+        inputTmdbApiKey.type = 'password';
+        btnToggleTmdbKey.textContent = 'Show';
+      }
+    });
+  }
+
+  if (btnToggleYtKey && inputYtApiKey) {
+    btnToggleYtKey.addEventListener('click', () => {
+      if (inputYtApiKey.type === 'password') {
+        inputYtApiKey.type = 'text';
+        btnToggleYtKey.textContent = 'Hide';
+      } else {
+        inputYtApiKey.type = 'password';
+        btnToggleYtKey.textContent = 'Show';
+      }
+    });
+  }
+
+  if (btnSaveApiKeys) {
+    btnSaveApiKeys.addEventListener('click', async () => {
+      const tmdbVal = (inputTmdbApiKey ? inputTmdbApiKey.value : '').trim();
+      const ytVal = (inputYtApiKey ? inputYtApiKey.value : '').trim();
+
+      btnSaveApiKeys.disabled = true;
+      btnSaveApiKeys.textContent = 'Testing connection…';
+
+      if (apiKeysNotice) {
+        apiKeysNotice.className = '';
+        apiKeysNotice.style.background = '#F0F9FF';
+        apiKeysNotice.style.border = '1px solid #BAE6FD';
+        apiKeysNotice.style.color = '#0369A1';
+        apiKeysNotice.textContent = 'Testing connection with movie services…';
+      }
+
+      try {
+        const testRes = await fetch('/api/test-keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tmdbKey: tmdbVal, youtubeKey: ytVal })
+        });
+        const testData = await testRes.json();
+
+        if (tmdbVal && !testData.tmdbValid) {
+          if (apiKeysNotice) {
+            apiKeysNotice.style.background = '#FEF2F2';
+            apiKeysNotice.style.border = '1px solid #FECACA';
+            apiKeysNotice.style.color = '#B91C1C';
+            apiKeysNotice.textContent = `❌ ${testData.tmdbMessage || 'Invalid TMDB key. Please check and re-paste.'}`;
+          }
+          btnSaveApiKeys.disabled = false;
+          btnSaveApiKeys.textContent = 'Save & Connect';
+          return;
+        }
+
+        // Store keys locally
+        if (tmdbVal) {
+          localStorage.setItem('user_tmdb_api_key', tmdbVal);
+        } else {
+          localStorage.removeItem('user_tmdb_api_key');
+        }
+
+        if (ytVal) {
+          localStorage.setItem('user_youtube_api_key', ytVal);
+        } else {
+          localStorage.removeItem('user_youtube_api_key');
+        }
+
+        // Optionally sync with user's Firestore profile if signed in
+        if (currentUser && db) {
+          try {
+            await setDoc(doc(db, 'users', currentUser.uid), {
+              custom_tmdb_key: tmdbVal || null,
+              custom_yt_key: ytVal || null,
+              keysUpdatedAt: new Date().toISOString()
+            }, { merge: true });
+          } catch {}
+        }
+
+        await checkAPIStatus();
+
+        if (apiKeysNotice) {
+          apiKeysNotice.style.background = '#ECFDF5';
+          apiKeysNotice.style.border = '1px solid #A7F3D0';
+          apiKeysNotice.style.color = '#065F46';
+          apiKeysNotice.textContent = `✅ Connected successfully! TMDB live title search and artwork are now active.`;
+        }
+        showNotice('API keys connected and saved.');
+
+        setTimeout(() => {
+          if (connModal && connModal.open) connModal.close();
+        }, 1200);
+
+      } catch (err) {
+        if (apiKeysNotice) {
+          apiKeysNotice.style.background = '#FEF2F2';
+          apiKeysNotice.style.border = '1px solid #FECACA';
+          apiKeysNotice.style.color = '#B91C1C';
+          apiKeysNotice.textContent = `Connection error: ${err.message}`;
+        }
+      } finally {
+        btnSaveApiKeys.disabled = false;
+        btnSaveApiKeys.textContent = 'Save & Connect';
+      }
+    });
+  }
+
+  if (btnClearApiKeys) {
+    btnClearApiKeys.addEventListener('click', async () => {
+      localStorage.removeItem('user_tmdb_api_key');
+      localStorage.removeItem('user_youtube_api_key');
+      if (inputTmdbApiKey) inputTmdbApiKey.value = '';
+      if (inputYtApiKey) inputYtApiKey.value = '';
+      if (currentUser && db) {
+        try {
+          await setDoc(doc(db, 'users', currentUser.uid), {
+            custom_tmdb_key: null,
+            custom_yt_key: null
+          }, { merge: true });
+        } catch {}
+      }
+      await checkAPIStatus();
+      if (apiKeysNotice) {
+        apiKeysNotice.className = '';
+        apiKeysNotice.style.background = '#F3F4F6';
+        apiKeysNotice.style.border = '1px solid #E5E7EB';
+        apiKeysNotice.style.color = '#4B5563';
+        apiKeysNotice.textContent = 'API keys cleared. Site is running in manual offline mode.';
+      }
+      showNotice('API keys removed.');
+    });
+  }
 
   // Cloud Projects Modal & Auth setup
   const cloudModal = document.getElementById('cloudModal');
@@ -1410,7 +1610,7 @@ function bindDetailCardEvents(card, m, tool = 'artwork') {
       }
       showNotice(`Searching YouTube for ${m.title}...`);
       try {
-        const res = await fetch(`/api/youtube?q=${encodeURIComponent(m.title)}`);
+        const res = await apiFetch(`/api/youtube?q=${encodeURIComponent(m.title)}`);
         const data = await res.json();
         if (data.videos && data.videos.length > 0) {
           m.videos.push(...data.videos);
@@ -1472,7 +1672,7 @@ async function fetchMovieMetadata(m) {
 
   try {
     const searchUrl = `/api/search?q=${encodeURIComponent(m.title)}${m.year ? `&year=${m.year}` : ''}${m.language ? `&language=${m.language}` : ''}`;
-    const searchRes = await fetch(searchUrl);
+    const searchRes = await apiFetch(searchUrl);
     const searchData = await searchRes.json();
 
     if (!searchData.results || searchData.results.length === 0) {
@@ -1502,7 +1702,7 @@ async function loadMovieDetailFromTMDB(m, tmdbId) {
 
   try {
     const detailUrl = `/api/movie/${tmdbId}${m.language ? `?language=${m.language}` : ''}`;
-    const res = await fetch(detailUrl);
+    const res = await apiFetch(detailUrl);
     const data = await res.json();
 
     m.id = data.movie.id;
@@ -1829,7 +2029,7 @@ async function handleFileImport(e, toolTarget) {
               const m = targetMovies[i];
               showNotice(`Auto-fetching poster & trailer (${i + 1}/${targetMovies.length}): ${m.title}...`);
               try {
-                const res = await fetch(`/api/fetch-movie-assets?title=${encodeURIComponent(m.title)}&year=${encodeURIComponent(m.year || '')}&language=${encodeURIComponent(m.language || '')}`);
+                const res = await apiFetch(`/api/fetch-movie-assets?title=${encodeURIComponent(m.title)}&year=${encodeURIComponent(m.year || '')}&language=${encodeURIComponent(m.language || '')}`);
                 if (res.ok) {
                   const assetData = await res.json();
                   if (assetData.poster_remote) {
@@ -2236,7 +2436,7 @@ function setupNewsletterSync() {
       }
       showNotice(`Searching TMDB poster for "${activeMovie.title}"...`);
       try {
-        const res = await fetch(`/api/fetch-movie-assets?title=${encodeURIComponent(activeMovie.title)}&year=${encodeURIComponent(activeMovie.year || '')}&language=${encodeURIComponent(activeMovie.language || '')}`);
+        const res = await apiFetch(`/api/fetch-movie-assets?title=${encodeURIComponent(activeMovie.title)}&year=${encodeURIComponent(activeMovie.year || '')}&language=${encodeURIComponent(activeMovie.language || '')}`);
         if (res.ok) {
           const data = await res.json();
           if (data.poster_remote) {
@@ -2303,7 +2503,7 @@ function setupNewsletterSync() {
       }
       showNotice(`Searching trailer for "${activeMovie.title}"...`);
       try {
-        const res = await fetch(`/api/fetch-movie-assets?title=${encodeURIComponent(activeMovie.title)}&year=${encodeURIComponent(activeMovie.year || '')}&language=${encodeURIComponent(activeMovie.language || '')}`);
+        const res = await apiFetch(`/api/fetch-movie-assets?title=${encodeURIComponent(activeMovie.title)}&year=${encodeURIComponent(activeMovie.year || '')}&language=${encodeURIComponent(activeMovie.language || '')}`);
         if (res.ok) {
           const data = await res.json();
           if (data.trailer_url) {

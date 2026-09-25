@@ -8,6 +8,7 @@
   "rewrites": [
     { "source": "/api/pdf", "destination": "/api/pdf.mjs" },
     { "source": "/api/status", "destination": "/api/status.mjs" },
+    { "source": "/api/test-keys", "destination": "/api/test-keys.mjs" },
     { "source": "/api/(.*)", "destination": "/api/index.mjs" },
     { "source": "/api", "destination": "/api/index.mjs" },
     { "source": "/(.*)", "destination": "/api/index.mjs" }
