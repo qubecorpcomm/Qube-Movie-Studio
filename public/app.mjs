@@ -4,6 +4,8 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut,
   onAuthStateChanged
 } from 'https://www.gstatic.com/firebasejs/11.4.0/firebase-auth.js';
@@ -101,15 +103,21 @@ function toolDisplayName(t) {
   return 'Workspace';
 }
 
-// DOM Initialization
-document.addEventListener('DOMContentLoaded', () => {
+// DOM Initialization with readyState safeguard
+function boot() {
   loadLocalState();
   checkAPIStatus();
   initFirebase();
   setupNavigation();
   setupEventHandlers();
   updateAllUI();
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
 
 const ALLOWED_EMAIL = 'qubecorpcomm@gmail.com';
 
@@ -159,48 +167,135 @@ async function checkAPIStatus() {
 
 // Initialize Firebase & Firestore
 async function initFirebase() {
+  if (auth) return auth;
   try {
-    const res = await fetch('/api/firebase-config');
-    if (!res.ok) return;
-    const config = await res.json();
-    if (!config.projectId) return;
+    let config = null;
+    try {
+      const res = await fetch('/api/firebase-config');
+      if (res.ok) config = await res.json();
+    } catch {}
+    if (!config || !config.projectId) {
+      try {
+        const res2 = await fetch('/firebase-applet-config.json');
+        if (res2.ok) config = await res2.json();
+      } catch {}
+    }
+    if (!config || !config.projectId) {
+      console.warn('Firebase configuration not available.');
+      return null;
+    }
 
-    firebaseApp = initializeApp(config);
-    db = getFirestore(firebaseApp, config.firestoreDatabaseId);
-    auth = getAuth(firebaseApp);
+    if (!firebaseApp) {
+      firebaseApp = initializeApp(config);
+      db = getFirestore(firebaseApp, config.firestoreDatabaseId);
+      auth = getAuth(firebaseApp);
+    }
+
+    // Process redirect result if returning from Google Auth redirect
+    try {
+      const redirectResult = await getRedirectResult(auth);
+      if (redirectResult && redirectResult.user) {
+        await handleSignedInUser(redirectResult.user);
+      }
+    } catch (redirectErr) {
+      console.warn('Redirect sign-in error:', redirectErr);
+      displayAuthError(redirectErr);
+    }
 
     // Validate connection to Firestore on boot
     testFirestoreConnection();
 
     // Listen to Auth State
     onAuthStateChanged(auth, async (user) => {
-      const gateErr = document.getElementById('authGateError');
-      if (user) {
-        const userEmail = (user.email || '').toLowerCase();
-        if (userEmail === ALLOWED_EMAIL) {
-          currentUser = user;
-          if (gateErr) gateErr.classList.add('hidden');
-          updateAuthUI();
-          saveUserProfile(user);
-          subscribeToCloudProjects(user.uid);
-        } else {
-          // Unauthorized email logged in
-          if (gateErr) {
-            gateErr.textContent = `Access Denied: ${user.email} is not authorized. Only qubecorpcomm@gmail.com can access this application.`;
-            gateErr.classList.remove('hidden');
-          }
-          await signOut(auth);
-          currentUser = null;
-          updateAuthUI();
-        }
-      } else {
-        currentUser = null;
-        updateAuthUI();
-      }
+      await handleSignedInUser(user);
     });
   } catch (err) {
     console.warn('Firebase initialization skipped or failed:', err);
   }
+  return auth;
+}
+
+async function handleSignedInUser(user) {
+  const gateErr = document.getElementById('authGateError');
+  if (user) {
+    const userEmail = (user.email || '').toLowerCase();
+    if (userEmail === ALLOWED_EMAIL) {
+      currentUser = user;
+      if (gateErr) gateErr.classList.add('hidden');
+      updateAuthUI();
+      saveUserProfile(user);
+      subscribeToCloudProjects(user.uid);
+      showNotice(`Signed in as ${userEmail}`);
+    } else {
+      // Unauthorized email logged in
+      if (gateErr) {
+        gateErr.innerHTML = `<strong>Access Denied:</strong> ${escapeHTML(user.email)} is not authorized to access this application.`;
+        gateErr.classList.remove('hidden');
+      }
+      await signOut(auth);
+      currentUser = null;
+      updateAuthUI();
+    }
+  } else {
+    currentUser = null;
+    updateAuthUI();
+  }
+}
+
+function displayAuthError(err) {
+  const gateErr = document.getElementById('authGateError');
+  const gateBtn = document.getElementById('btnGateSignIn');
+  if (gateBtn) {
+    gateBtn.disabled = false;
+    gateBtn.textContent = 'Sign in with Google';
+  }
+  if (!gateErr) return;
+
+  const currentHost = window.location.hostname;
+  const isVercel = currentHost.includes('vercel.app');
+
+  if (err.code === 'auth/unauthorized-domain') {
+    gateErr.innerHTML = `
+      <div style="font-weight:700; margin-bottom:4px; color:#991B1B;">Domain Authorization Required</div>
+      <div style="margin-bottom:8px;">
+        The domain <code>${escapeHTML(currentHost)}</code> is not in your Firebase Authentication Authorized Domains list.
+      </div>
+      <div style="font-size:11px; line-height:1.5; color:#374151; background:#ffffff; padding:8px 10px; border-radius:6px; border:1px solid #FCA5A5;">
+        <strong>To resolve:</strong><br>
+        1. Open <a href="https://console.firebase.google.com/project/gen-lang-client-0078890909/authentication/settings" target="_blank" rel="noopener noreferrer" style="color:#2563eb; text-decoration:underline; font-weight:600;">Firebase Console &rarr; Auth Settings</a><br>
+        2. Click <strong>Authorized domains</strong> &rarr; <strong>Add domain</strong><br>
+        3. Enter <code>${escapeHTML(currentHost)}</code> and click <strong>Save</strong>.<br>
+        <div style="margin-top:6px; font-style:italic;">Or access the pre-authorized preview URL directly.</div>
+      </div>
+    `;
+  } else if (err.code === 'auth/popup-blocked' || err.code === 'auth/cancelled-popup-request') {
+    gateErr.innerHTML = `
+      <div style="font-weight:700; margin-bottom:4px; color:#991B1B;">Popup Blocked by Browser</div>
+      <div style="margin-bottom:6px;">
+        Your browser (e.g. Brave Shields or ad-blocker) blocked the Google sign-in window.
+      </div>
+      <div style="font-size:11px; color:#374151;">
+        Please click <strong>"Sign in with Redirect"</strong> below or lower Brave Shields for this domain.
+      </div>
+    `;
+  } else if (err.code === 'auth/network-request-failed') {
+    gateErr.innerHTML = `
+      <div style="font-weight:700; margin-bottom:4px; color:#991B1B;">Network / Third-Party Cookie Blocked</div>
+      <div style="margin-bottom:4px;">
+        Google Auth network request failed. If using Brave Browser, please turn <strong>Shields DOWN</strong> for this domain or allow Google login.
+      </div>
+    `;
+  } else if (err.code === 'auth/popup-closed-by-user') {
+    gateErr.innerHTML = `
+      <div>Sign-in popup was closed before completing. Click below to try again.</div>
+    `;
+  } else {
+    gateErr.innerHTML = `
+      <div style="font-weight:700; margin-bottom:4px; color:#991B1B;">Sign-in Error (${escapeHTML(err.code || 'unknown')})</div>
+      <div>${escapeHTML(err.message || String(err))}</div>
+    `;
+  }
+  gateErr.classList.remove('hidden');
 }
 
 async function testFirestoreConnection() {
@@ -235,29 +330,72 @@ async function saveUserProfile(user) {
 }
 
 // Auth Handlers
-async function signInWithGoogle() {
+async function signInWithGoogle(useRedirect = false) {
+  const gateBtn = document.getElementById('btnGateSignIn');
+  const gateRedirectBtn = document.getElementById('btnGateSignInRedirect');
+  const gateErr = document.getElementById('authGateError');
+  if (gateErr) gateErr.classList.add('hidden');
+
+  if (gateBtn) {
+    gateBtn.disabled = true;
+    gateBtn.textContent = 'Connecting…';
+  }
+
   if (!auth) {
-    showNotice('Firebase Auth is not available.', 'error');
+    await initFirebase();
+  }
+
+  if (!auth) {
+    if (gateErr) {
+      gateErr.innerHTML = `<strong>Authentication Unavailable:</strong> Could not connect to Firebase. Check your internet connection or reload the page.`;
+      gateErr.classList.remove('hidden');
+    }
+    if (gateBtn) {
+      gateBtn.disabled = false;
+      gateBtn.textContent = 'Sign in with Google';
+    }
     return;
   }
+
   const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+
   try {
+    if (useRedirect) {
+      if (gateRedirectBtn) gateRedirectBtn.textContent = 'Redirecting to Google…';
+      await signInWithRedirect(auth, provider);
+      return;
+    }
+
+    if (gateBtn) gateBtn.textContent = 'Signing in…';
     const result = await signInWithPopup(auth, provider);
-    const signedInEmail = (result.user?.email || '').toLowerCase();
-    if (signedInEmail !== ALLOWED_EMAIL) {
-      const gateErr = document.getElementById('authGateError');
-      if (gateErr) {
-        gateErr.textContent = `Access Denied: ${result.user?.email} is not authorized. Only qubecorpcomm@gmail.com can access this application.`;
-        gateErr.classList.remove('hidden');
-      }
-      await signOut(auth);
-      currentUser = null;
-      updateAuthUI();
-    } else {
-      showNotice(`Signed in as ${signedInEmail}`);
+    if (result && result.user) {
+      await handleSignedInUser(result.user);
     }
   } catch (err) {
-    showNotice(`Sign-in error: ${err.message}`, 'error');
+    console.error('Sign-in error:', err);
+    if (!useRedirect && (err.code === 'auth/popup-blocked' || err.code === 'auth/cancelled-popup-request')) {
+      try {
+        if (gateErr) {
+          gateErr.innerHTML = `Popup blocked. Automatically redirecting to Google Sign-in…`;
+          gateErr.classList.remove('hidden');
+        }
+        await signInWithRedirect(auth, provider);
+        return;
+      } catch (redirErr) {
+        displayAuthError(redirErr);
+        return;
+      }
+    }
+    displayAuthError(err);
+  } finally {
+    if (gateBtn) {
+      gateBtn.disabled = false;
+      gateBtn.textContent = 'Sign in with Google';
+    }
+    if (gateRedirectBtn) {
+      gateRedirectBtn.textContent = 'Popup blocked or in Brave? Sign in with Redirect →';
+    }
   }
 }
 
@@ -287,7 +425,7 @@ function updateAuthUI() {
     if (btnSignIn) btnSignIn.classList.add('hidden');
     if (badge) badge.classList.remove('hidden');
     if (avatar) avatar.src = currentUser.photoURL || 'https://www.gstatic.com/images/branding/product/2x/avatar_square_32dp.png';
-    if (nameEl) nameEl.textContent = currentUser.displayName || currentUser.email || 'qubecorpcomm';
+    if (nameEl) nameEl.textContent = currentUser.displayName || currentUser.email || 'Authorized User';
     if (authWarning) authWarning.classList.add('hidden');
     if (saveBlock) saveBlock.classList.remove('hidden');
     if (overlay) overlay.classList.add('hidden');
@@ -646,10 +784,13 @@ function setupEventHandlers() {
   if (btnCloseCloud2 && cloudModal) btnCloseCloud2.addEventListener('click', () => cloudModal.close());
 
   const btnSignIn = document.getElementById('btnSignInGoogle');
-  if (btnSignIn) btnSignIn.addEventListener('click', signInWithGoogle);
+  if (btnSignIn) btnSignIn.addEventListener('click', () => signInWithGoogle(false));
 
   const btnGateSignIn = document.getElementById('btnGateSignIn');
-  if (btnGateSignIn) btnGateSignIn.addEventListener('click', signInWithGoogle);
+  if (btnGateSignIn) btnGateSignIn.addEventListener('click', () => signInWithGoogle(false));
+
+  const btnGateSignInRedirect = document.getElementById('btnGateSignInRedirect');
+  if (btnGateSignInRedirect) btnGateSignInRedirect.addEventListener('click', () => signInWithGoogle(true));
 
   const btnSignOut = document.getElementById('btnSignOut');
   if (btnSignOut) btnSignOut.addEventListener('click', signOutUser);

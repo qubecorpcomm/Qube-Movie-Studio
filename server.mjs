@@ -380,12 +380,13 @@ export async function handleRequest(req, res) {
       '/index.html': 'index.html',
       '/app.mjs': 'app.mjs',
       '/core.mjs': 'core.mjs',
-      '/style.css': 'style.css'
+      '/style.css': 'style.css',
+      '/firebase-applet-config.json': 'firebase-applet-config.json'
     };
 
     if (req.method === 'GET' && files[u.pathname]) {
       const name = files[u.pathname];
-      const type = name.endsWith('.html') ? 'text/html; charset=utf-8' : name.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8';
+      const type = name.endsWith('.html') ? 'text/html; charset=utf-8' : name.endsWith('.css') ? 'text/css; charset=utf-8' : name.endsWith('.json') ? 'application/json; charset=utf-8' : 'text/javascript; charset=utf-8';
       const fileBuf = await readAssetFile(name);
       return send(res, 200, fileBuf, type);
     }

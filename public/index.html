@@ -635,12 +635,14 @@
       <div class="auth-gate-icon">🔒</div>
       <h2 class="auth-gate-title">Authorized Access Only</h2>
       <p class="auth-gate-subtitle">
-        This web application is exclusively for:<br>
-        <span class="auth-gate-email-tag">qubecorpcomm@gmail.com</span>
+        Sign in with your authorized Google account to access your workspace.
       </p>
       <div id="authGateError" class="auth-gate-error hidden"></div>
       <button class="btn btn-primary btn-full btn-lg" id="btnGateSignIn">
         Sign in with Google
+      </button>
+      <button class="btn btn-ghost btn-sm btn-full" id="btnGateSignInRedirect" style="margin-top: 10px; font-size: 12px; color: var(--muted-text);">
+        Popup blocked or in Brave? Sign in with Redirect &rarr;
       </button>
     </div>
   </div>
