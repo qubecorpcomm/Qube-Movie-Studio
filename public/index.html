@@ -569,10 +569,23 @@
           TMDB: Checking… · YouTube: Checking…
         </div>
         <p class="modal-description">
-          TMDB_API_KEY is required for live title search, artwork, and metadata retrieval. YOUTUBE_API_KEY is optional for expanded video search.
+          <strong>TMDB_API_KEY</strong> is required for live title search, artwork, and metadata retrieval. <strong>YOUTUBE_API_KEY</strong> is optional for automated trailer discovery.
         </p>
-        <p class="modal-note">
-          Manual editing, project imports, and email newsletter export work seamlessly without API keys.
+
+        <div style="background: #F4F7F4; border: 1px solid var(--card-border); border-radius: 8px; padding: 14px; margin-top: 14px; font-size: 12px; line-height: 1.6;">
+          <div style="font-weight: 700; margin-bottom: 6px; color: var(--body-text);">How to add your API Key in Vercel:</div>
+          <ol style="margin-left: 18px; padding-left: 0; color: #4B5563;">
+            <li>Get a free API key from <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer" style="color: var(--primary-green); font-weight: 600; text-decoration: underline;">themoviedb.org</a> (v3 API key).</li>
+            <li>Open your <a href="https://vercel.com/dashboard" target="_blank" rel="noopener noreferrer" style="color: var(--primary-green); font-weight: 600; text-decoration: underline;">Vercel Project Dashboard</a>.</li>
+            <li>Navigate to <strong>Settings</strong> &rarr; <strong>Environment Variables</strong>.</li>
+            <li>Add variable name <code>TMDB_API_KEY</code> and paste your key.</li>
+            <li>(Optional) Add <code>YOUTUBE_API_KEY</code> for automated YouTube trailer lookups.</li>
+            <li>Go to <strong>Deployments</strong> &rarr; click <strong>Redeploy</strong> to apply changes.</li>
+          </ol>
+        </div>
+
+        <p class="modal-note" style="margin-top: 12px;">
+          <em>Note:</em> Manual editing, project imports, PDF extraction, and email newsletter export work seamlessly without API keys.
         </p>
       </div>
       <div class="modal-footer">
