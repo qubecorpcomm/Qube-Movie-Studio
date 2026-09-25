@@ -154,28 +154,39 @@ async function checkAPIStatus() {
   const statusText = document.getElementById('connectionStatusText');
   const modalStatusLine = document.getElementById('modalStatusLine');
 
+  const localTmdb = (localStorage.getItem('user_tmdb_api_key') || '').trim();
+  const localYt = (localStorage.getItem('user_youtube_api_key') || '').trim();
+
   try {
     const res = await apiFetch('/api/status');
     const data = await res.json();
-    state.status = data;
-
-    if (data.tmdb) {
-      if (statusDot) statusDot.className = 'status-dot';
-      if (statusText) statusText.textContent = data.tmdbSource === 'client' ? 'TMDB connected (Custom Key)' : 'TMDB connected';
-      if (modalStatusLine) {
-        modalStatusLine.textContent = `TMDB: Connected ✅ (${data.tmdbSource === 'client' ? 'Custom key' : 'Active'}) · YouTube: ${data.youtube ? 'Connected ✅' : 'Optional (Not added)'}`;
-      }
-    } else {
-      if (statusDot) statusDot.className = 'status-dot offline';
-      if (statusText) statusText.textContent = 'Manual mode · enter API key';
-      if (modalStatusLine) {
-        modalStatusLine.textContent = 'TMDB: Key missing (Enter key below) · YouTube: Optional';
-      }
-    }
+    state.status = {
+      ...data,
+      tmdb: data.tmdb || !!localTmdb,
+      youtube: data.youtube || !!localYt,
+      tmdbSource: localTmdb ? 'client' : (data.tmdb ? 'server' : 'none')
+    };
   } catch {
+    state.status = {
+      tmdb: !!localTmdb,
+      youtube: !!localYt,
+      tmdbSource: localTmdb ? 'client' : 'none',
+      youtubeSource: localYt ? 'client' : 'none'
+    };
+  }
+
+  if (state.status.tmdb) {
+    if (statusDot) statusDot.className = 'status-dot';
+    if (statusText) statusText.textContent = 'TMDB connected';
+    if (modalStatusLine) {
+      modalStatusLine.textContent = `TMDB: Connected ✅ · YouTube: ${state.status.youtube ? 'Connected ✅' : 'Optional'}`;
+    }
+  } else {
     if (statusDot) statusDot.className = 'status-dot offline';
-    if (statusText) statusText.textContent = 'Server unavailable';
-    if (modalStatusLine) modalStatusLine.textContent = 'Server could not be reached.';
+    if (statusText) statusText.textContent = 'Manual mode · enter API key';
+    if (modalStatusLine) {
+      modalStatusLine.textContent = 'TMDB: Key missing (Enter key below) · YouTube: Optional';
+    }
   }
 }
 
@@ -864,85 +875,51 @@ function setupEventHandlers() {
       const ytVal = (inputYtApiKey ? inputYtApiKey.value : '').trim();
 
       btnSaveApiKeys.disabled = true;
-      btnSaveApiKeys.textContent = 'Testing connection…';
+      btnSaveApiKeys.textContent = 'Saving…';
+
+      // Store keys locally
+      if (tmdbVal) {
+        localStorage.setItem('user_tmdb_api_key', tmdbVal);
+      } else {
+        localStorage.removeItem('user_tmdb_api_key');
+      }
+
+      if (ytVal) {
+        localStorage.setItem('user_youtube_api_key', ytVal);
+      } else {
+        localStorage.removeItem('user_youtube_api_key');
+      }
+
+      // Sync with user's Firestore profile if signed in
+      if (currentUser && db) {
+        try {
+          await setDoc(doc(db, 'users', currentUser.uid), {
+            custom_tmdb_key: tmdbVal || null,
+            custom_yt_key: ytVal || null,
+            keysUpdatedAt: new Date().toISOString()
+          }, { merge: true });
+        } catch {}
+      }
+
+      await checkAPIStatus();
 
       if (apiKeysNotice) {
         apiKeysNotice.className = '';
-        apiKeysNotice.style.background = '#F0F9FF';
-        apiKeysNotice.style.border = '1px solid #BAE6FD';
-        apiKeysNotice.style.color = '#0369A1';
-        apiKeysNotice.textContent = 'Testing connection with movie services…';
+        apiKeysNotice.style.background = '#ECFDF5';
+        apiKeysNotice.style.border = '1px solid #A7F3D0';
+        apiKeysNotice.style.color = '#065F46';
+        apiKeysNotice.textContent = tmdbVal
+          ? '✅ TMDB API key connected successfully!'
+          : 'Saved in manual mode.';
       }
 
-      try {
-        const testRes = await fetch('/api/test-keys', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tmdbKey: tmdbVal, youtubeKey: ytVal })
-        });
-        const testData = await testRes.json();
+      showNotice(tmdbVal ? 'TMDB connected successfully.' : 'API keys updated.');
 
-        if (tmdbVal && !testData.tmdbValid) {
-          if (apiKeysNotice) {
-            apiKeysNotice.style.background = '#FEF2F2';
-            apiKeysNotice.style.border = '1px solid #FECACA';
-            apiKeysNotice.style.color = '#B91C1C';
-            apiKeysNotice.textContent = `❌ ${testData.tmdbMessage || 'Invalid TMDB key. Please check and re-paste.'}`;
-          }
-          btnSaveApiKeys.disabled = false;
-          btnSaveApiKeys.textContent = 'Save & Connect';
-          return;
-        }
-
-        // Store keys locally
-        if (tmdbVal) {
-          localStorage.setItem('user_tmdb_api_key', tmdbVal);
-        } else {
-          localStorage.removeItem('user_tmdb_api_key');
-        }
-
-        if (ytVal) {
-          localStorage.setItem('user_youtube_api_key', ytVal);
-        } else {
-          localStorage.removeItem('user_youtube_api_key');
-        }
-
-        // Optionally sync with user's Firestore profile if signed in
-        if (currentUser && db) {
-          try {
-            await setDoc(doc(db, 'users', currentUser.uid), {
-              custom_tmdb_key: tmdbVal || null,
-              custom_yt_key: ytVal || null,
-              keysUpdatedAt: new Date().toISOString()
-            }, { merge: true });
-          } catch {}
-        }
-
-        await checkAPIStatus();
-
-        if (apiKeysNotice) {
-          apiKeysNotice.style.background = '#ECFDF5';
-          apiKeysNotice.style.border = '1px solid #A7F3D0';
-          apiKeysNotice.style.color = '#065F46';
-          apiKeysNotice.textContent = `✅ Connected successfully! TMDB live title search and artwork are now active.`;
-        }
-        showNotice('API keys connected and saved.');
-
-        setTimeout(() => {
-          if (connModal && connModal.open) connModal.close();
-        }, 1200);
-
-      } catch (err) {
-        if (apiKeysNotice) {
-          apiKeysNotice.style.background = '#FEF2F2';
-          apiKeysNotice.style.border = '1px solid #FECACA';
-          apiKeysNotice.style.color = '#B91C1C';
-          apiKeysNotice.textContent = `Connection error: ${err.message}`;
-        }
-      } finally {
+      setTimeout(() => {
+        if (connModal && connModal.open) connModal.close();
         btnSaveApiKeys.disabled = false;
         btnSaveApiKeys.textContent = 'Save & Connect';
-      }
+      }, 900);
     });
   }
 
@@ -1671,11 +1648,29 @@ async function fetchMovieMetadata(m) {
   updateAllUI();
 
   try {
-    const searchUrl = `/api/search?q=${encodeURIComponent(m.title)}${m.year ? `&year=${m.year}` : ''}${m.language ? `&language=${m.language}` : ''}`;
-    const searchRes = await apiFetch(searchUrl);
-    const searchData = await searchRes.json();
+    let searchData = null;
+    try {
+      const searchUrl = `/api/search?q=${encodeURIComponent(m.title)}${m.year ? `&year=${m.year}` : ''}${m.language ? `&language=${m.language}` : ''}`;
+      const searchRes = await apiFetch(searchUrl);
+      if (searchRes.ok) searchData = await searchRes.json();
+    } catch {}
 
-    if (!searchData.results || searchData.results.length === 0) {
+    // Direct browser TMDB query fallback if server route had an issue
+    if (!searchData || !searchData.results) {
+      const customTmdb = (localStorage.getItem('user_tmdb_api_key') || '').trim();
+      if (customTmdb) {
+        try {
+          const directUrl = `https://api.themoviedb.org/3/search/movie?api_key=${encodeURIComponent(customTmdb)}&query=${encodeURIComponent(m.title)}${m.year ? `&year=${encodeURIComponent(m.year)}` : ''}&include_adult=false`;
+          const directRes = await fetch(directUrl);
+          if (directRes.ok) {
+            const rawData = await directRes.json();
+            searchData = { results: rawData.results || [] };
+          }
+        } catch {}
+      }
+    }
+
+    if (!searchData || !searchData.results || searchData.results.length === 0) {
       m.status = 'error';
       m.statusText = 'No match · edit title';
       updateAllUI();
@@ -1701,9 +1696,52 @@ async function loadMovieDetailFromTMDB(m, tmdbId) {
   updateAllUI();
 
   try {
-    const detailUrl = `/api/movie/${tmdbId}${m.language ? `?language=${m.language}` : ''}`;
-    const res = await apiFetch(detailUrl);
-    const data = await res.json();
+    let data = null;
+    try {
+      const detailUrl = `/api/movie/${tmdbId}${m.language ? `?language=${m.language}` : ''}`;
+      const res = await apiFetch(detailUrl);
+      if (res.ok) data = await res.json();
+    } catch {}
+
+    // Direct browser TMDB detail fallback
+    if (!data || !data.movie) {
+      const customTmdb = (localStorage.getItem('user_tmdb_api_key') || '').trim();
+      if (customTmdb) {
+        try {
+          const directUrl = `https://api.themoviedb.org/3/movie/${encodeURIComponent(tmdbId)}?api_key=${encodeURIComponent(customTmdb)}&append_to_response=images,videos`;
+          const directRes = await fetch(directUrl);
+          if (directRes.ok) {
+            const mRaw = await directRes.json();
+            const posters = (mRaw.images?.posters || []).map(p => ({
+              url: `https://image.tmdb.org/t/p/w500${p.file_path}`,
+              width: p.width,
+              height: p.height
+            }));
+            const vids = (mRaw.videos?.results || []).filter(v => v.site === 'YouTube').map(v => ({
+              name: v.name,
+              url: `https://www.youtube.com/watch?v=${v.key}`,
+              type: v.type
+            }));
+            data = {
+              movie: {
+                id: mRaw.id,
+                title: mRaw.title,
+                year: mRaw.release_date?.slice(0, 4) || '',
+                original_language: mRaw.original_language,
+                imdb_id: mRaw.imdb_id,
+                overview: mRaw.overview
+              },
+              images: { poster: posters, backdrop: [], logo: [] },
+              videos: vids
+            };
+          }
+        } catch {}
+      }
+    }
+
+    if (!data || !data.movie) {
+      throw new Error('Failed to load movie details');
+    }
 
     m.id = data.movie.id;
     m.imdb_id = data.movie.imdb_id;
