@@ -550,6 +550,13 @@ li.checked::marker { content: "\\2612"; }
       posterUrl = m.poster_remote || m.selectedPoster || m.poster_url || m.posterUrl || m.poster || m.images?.poster?.[0]?.url || '';
     }
 
+    if (!posterUrl && trailerUrl) {
+      const ytMatch = trailerUrl.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
+      if (ytMatch && ytMatch[1]) {
+        posterUrl = `https://i.ytimg.com/vi/${ytMatch[1]}/hqdefault.jpg`;
+      }
+    }
+
     if (posterUrl && posterUrl.startsWith('/')) {
       posterUrl = posterUrl.startsWith('/w') || posterUrl.startsWith('/original')
         ? `https://image.tmdb.org/t/p${posterUrl}`

@@ -35,6 +35,16 @@ async function search(u){const title=(u.searchParams.get('q')||'').slice(0,180),
         if(!results.length&&year)results=(await tmdb('/search/movie',{query:primary,include_adult:'false'})).results||[];
       }
     }
+    if(!results.length){
+      try {
+        const multi = (await tmdb('/search/multi',{query:title,include_adult:'false'})).results||[];
+        results = multi.map(item=>({
+          ...item,
+          title: item.title || item.name || '',
+          release_date: item.release_date || item.first_air_date || ''
+        })).filter(m => m.poster_path || m.profile_path);
+      } catch {}
+    }
   }
   const score=(m,i)=>20-i*3+([m.title,m.original_title].some(t=>norm(t)===norm(title))?50:0)+(year&&m.release_date?.startsWith(year)?30:0)+(hint&&hint===m.original_language?25:0);
   return results.slice(0,12).map((m,i)=>({...m,score:score(m,i)})).sort((a,b)=>b.score-a.score);
@@ -147,7 +157,7 @@ async function fetchMovieAssets(title, year, language) {
     // 4. Fallback Poster from Wikipedia API if TMDB search returns no poster
     if (!poster_remote) {
       const cleanTitle = title.replace(/[:\-–—]\s*(encore|re-release|re-issue|imax|scope|flat|infinity\s*vision|part\s*\d+).*$/i, '').trim() || title;
-      const wikiQueries = [cleanTitle, `${cleanTitle} (film)`, title];
+      const wikiQueries = [cleanTitle, `${cleanTitle} (film)`, `${cleanTitle} (TV series)`, `${cleanTitle} (series)`, title];
       for (const wq of wikiQueries) {
         if (poster_remote) break;
         try {

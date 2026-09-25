@@ -1613,6 +1613,15 @@ async function handleFileImport(e, toolTarget) {
                     m.trailer_url = assetData.trailer_url;
                     m.selectedTrailer = assetData.trailer_url;
                   }
+                  if (!m.selectedPoster && !m.poster_url && m.trailer_url) {
+                    const ytMatch = m.trailer_url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
+                    if (ytMatch && ytMatch[1]) {
+                      const ytThumb = `https://i.ytimg.com/vi/${ytMatch[1]}/hqdefault.jpg`;
+                      m.poster_remote = ytThumb;
+                      m.poster_url = ytThumb;
+                      m.selectedPoster = ytThumb;
+                    }
+                  }
                 }
               } catch {
                 // Fallback to fetchMovieMetadata
@@ -1863,11 +1872,7 @@ function setupNewsletterSync() {
     activeMovie.poster_mode = pMode;
     activeMovie.posterMode = pMode;
 
-    const posterVal = document.getElementById('nlDetailPosterUrl')?.value.trim() || '';
-    activeMovie.poster_url = posterVal;
-    activeMovie.posterUrl = posterVal;
-    activeMovie.selectedPoster = posterVal;
-    activeMovie.poster_remote = posterVal;
+    let posterVal = document.getElementById('nlDetailPosterUrl')?.value.trim() || '';
 
     const tMode = document.getElementById('nlDetailTrailerMode')?.value || 'auto';
     activeMovie.trailer_mode = tMode;
@@ -1880,6 +1885,20 @@ function setupNewsletterSync() {
     activeMovie.trailer_url = trailerVal;
     activeMovie.trailerUrl = trailerVal;
     activeMovie.selectedTrailer = trailerVal;
+
+    if (!posterVal && trailerVal) {
+      const ytMatch = trailerVal.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
+      if (ytMatch && ytMatch[1]) {
+        posterVal = `https://i.ytimg.com/vi/${ytMatch[1]}/hqdefault.jpg`;
+        const pInput = document.getElementById('nlDetailPosterUrl');
+        if (pInput) pInput.value = posterVal;
+      }
+    }
+
+    activeMovie.poster_url = posterVal;
+    activeMovie.posterUrl = posterVal;
+    activeMovie.selectedPoster = posterVal;
+    activeMovie.poster_remote = posterVal;
 
     const incCheck = document.getElementById('nlDetailInclude');
     if (incCheck) {
