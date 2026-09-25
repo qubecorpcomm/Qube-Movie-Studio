@@ -258,63 +258,151 @@ async function pdfText(buffer){
   if (fallback.trim()) return fallback;
   throw fail('This PDF has no selectable text. Paste its text or use OCR first.');
 }
-export function createServer(){return http.createServer(async(req,res)=>{
-  try{const u=new URL(req.url,'http://localhost');
+async function readAssetFile(relativePath) {
+  const clean = relativePath.replace(/^\/+/, '');
+  const candidates = [
+    new URL(clean, publicDir),
+    new URL(`./public/${clean}`, import.meta.url),
+    new URL(clean, `file://${process.cwd()}/public/`),
+    new URL(`./${clean}`, `file://${process.cwd()}/`)
+  ];
+  for (const c of candidates) {
+    try {
+      return await readFile(c);
+    } catch {}
+  }
+  throw fail('File not found: ' + relativePath, 404);
+}
+
+export async function handleRequest(req, res) {
+  try {
+    const hostHeader = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
+    const proto = req.headers['x-forwarded-proto'] || 'http';
+    const u = new URL(req.url, `${proto}://${hostHeader}`);
+
     // API is same-origin. Prevent websites using a local server's credentials via browsers.
-    if(u.pathname.startsWith('/api/')&&req.headers.origin){
-      const originHost=new URL(req.headers.origin).hostname;
-      const reqHost=(req.headers['x-forwarded-host']||req.headers.host||'').split(':')[0];
-      const isAllowed=originHost===reqHost||originHost==='localhost'||originHost==='127.0.0.1'||originHost.endsWith('.run.app')||originHost.endsWith('.google.com');
-      if(!isAllowed)throw fail('Cross-origin request refused.',403);
+    if (u.pathname.startsWith('/api/') && req.headers.origin) {
+      const originHost = new URL(req.headers.origin).hostname;
+      const reqHost = hostHeader.split(':')[0];
+      const isAllowed = originHost === reqHost || originHost === 'localhost' || originHost === '127.0.0.1' || originHost.endsWith('.run.app') || originHost.endsWith('.google.com') || originHost.endsWith('.vercel.app');
+      if (!isAllowed) throw fail('Cross-origin request refused.', 403);
     }
-    if(req.method==='GET'&&u.pathname==='/api/status')return send(res,200,{tmdb:!!process.env.TMDB_API_KEY,youtube:!!process.env.YOUTUBE_API_KEY});
-    if(req.method==='GET'&&u.pathname==='/api/firebase-config'){
-      try {
-        const configData = await readFile(new URL('./firebase-applet-config.json', import.meta.url), 'utf8');
-        return send(res, 200, JSON.parse(configData));
-      } catch {
-        return send(res, 404, { error: 'Firebase config not found.' });
+
+    if (req.method === 'GET' && u.pathname === '/api/status') {
+      return send(res, 200, { tmdb: !!process.env.TMDB_API_KEY, youtube: !!process.env.YOUTUBE_API_KEY });
+    }
+
+    if (req.method === 'GET' && u.pathname === '/api/firebase-config') {
+      const configCandidates = [
+        new URL('./firebase-applet-config.json', import.meta.url),
+        new URL('./firebase-applet-config.json', `file://${process.cwd()}/`)
+      ];
+      for (const cand of configCandidates) {
+        try {
+          const configData = await readFile(cand, 'utf8');
+          return send(res, 200, JSON.parse(configData));
+        } catch {}
       }
+      return send(res, 404, { error: 'Firebase config not found.' });
     }
-    if(req.method==='GET'&&u.pathname==='/api/search')return send(res,200,{results:await search(u)});
-    const match=u.pathname.match(/^\/api\/movie\/(\d+)$/);
-    if(req.method==='GET'&&match)return send(res,200,await detail(match[1],u.searchParams.get('language')));
-    if(req.method==='GET'&&u.pathname==='/api/fetch-movie-assets'){
-      const title=u.searchParams.get('title')||'';
-      const year=u.searchParams.get('year')||'';
-      const lang=u.searchParams.get('language')||'';
-      return send(res,200,await fetchMovieAssets(title,year,lang));
+
+    if (req.method === 'GET' && u.pathname === '/api/search') {
+      return send(res, 200, { results: await search(u) });
     }
-    if(req.method==='GET'&&u.pathname==='/api/youtube'){
-      if(youtubeQuotaExceeded)throw fail('YouTube API quota reached for this session. Use manual trailer links.',403);
-      if(!process.env.YOUTUBE_API_KEY)throw fail('Optional YouTube search needs YOUTUBE_API_KEY.',503);
-      const q=(u.searchParams.get('q')||'').trim().toLowerCase().slice(0,200);
-      if(!q)throw fail('Enter a search title.');
-      if(youtubeCache.has(q))return send(res,200,{videos:youtubeCache.get(q)});
-      const url=new URL('https://www.googleapis.com/youtube/v3/search');url.search=new URLSearchParams({part:'snippet',type:'video',maxResults:'6',q:q+' official trailer',key:process.env.YOUTUBE_API_KEY});
+
+    const match = u.pathname.match(/^\/api\/movie\/(\d+)$/);
+    if (req.method === 'GET' && match) {
+      return send(res, 200, await detail(match[1], u.searchParams.get('language')));
+    }
+
+    if (req.method === 'GET' && u.pathname === '/api/fetch-movie-assets') {
+      const title = u.searchParams.get('title') || '';
+      const year = u.searchParams.get('year') || '';
+      const lang = u.searchParams.get('language') || '';
+      return send(res, 200, await fetchMovieAssets(title, year, lang));
+    }
+
+    if (req.method === 'GET' && u.pathname === '/api/youtube') {
+      if (youtubeQuotaExceeded) throw fail('YouTube API quota reached for this session. Use manual trailer links.', 403);
+      if (!process.env.YOUTUBE_API_KEY) throw fail('Optional YouTube search needs YOUTUBE_API_KEY.', 503);
+      const q = (u.searchParams.get('q') || '').trim().toLowerCase().slice(0, 200);
+      if (!q) throw fail('Enter a search title.');
+      if (youtubeCache.has(q)) return send(res, 200, { videos: youtubeCache.get(q) });
+      const url = new URL('https://www.googleapis.com/youtube/v3/search');
+      url.search = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '6', q: q + ' official trailer', key: process.env.YOUTUBE_API_KEY });
       try {
-        const d=await api(url);
-        const videos=(d.items||[]).map(v=>({name:v.snippet.title,url:youtubeURL(v.id.videoId),type:'YouTube search',iso_639_1:''}));
-        youtubeCache.set(q,videos);
-        return send(res,200,{videos});
-      } catch(err) {
-        if(err.message&&(err.message.includes('403')||err.message.includes('quota'))){
-          youtubeQuotaExceeded=true;
-          throw fail('YouTube API quota reached for this session. Use manual trailer links.',403);
+        const d = await api(url);
+        const videos = (d.items || []).map(v => ({ name: v.snippet.title, url: youtubeURL(v.id.videoId), type: 'YouTube search', iso_639_1: '' }));
+        youtubeCache.set(q, videos);
+        return send(res, 200, { videos });
+      } catch (err) {
+        if (err.message && (err.message.includes('403') || err.message.includes('quota'))) {
+          youtubeQuotaExceeded = true;
+          throw fail('YouTube API quota reached for this session. Use manual trailer links.', 403);
         }
         throw err;
       }
     }
-    if(req.method==='POST'&&u.pathname==='/api/pdf')return send(res,200,{text:await pdfText(await body(req))});
-    if(req.method==='POST'&&u.pathname==='/api/embed'){const b=await jsonBody(req),i=await imageBytes(b.url);return send(res,200,{url:`data:${i.mime};base64,${i.buffer.toString('base64')}`});}
-    if(req.method==='POST'&&u.pathname==='/api/artwork.zip'){
-      const {assets}=await jsonBody(req);if(!Array.isArray(assets)||!assets.length||assets.length>60)throw fail('Choose between 1 and 60 images per ZIP.');let JSZip;try{JSZip=(await dependency('jszip','MOVIESTUDIO_ZIP_MODULE')).default;}catch{throw fail('ZIP support is not installed. Run npm install.',503);}const zip=new JSZip();let total=0;
-      for(const [n,a]of assets.entries()){const i=await imageBytes(a.url);total+=i.buffer.length;if(total>100*1024*1024)throw fail('This ZIP exceeds 100 MB. Download fewer images.');const name=String(a.name||'artwork').replace(/[^\p{L}\p{N}_-]/gu,'_').slice(0,100);zip.file(`${n+1}_${name}.${i.mime.split('/')[1]}`,i.buffer);}
-      res.setHeader('Content-Disposition','attachment; filename="movie-artwork.zip"');return send(res,200,await zip.generateAsync({type:'nodebuffer'}),'application/zip');
+
+    if (req.method === 'POST' && u.pathname === '/api/pdf') {
+      return send(res, 200, { text: await pdfText(await body(req)) });
     }
-    const files={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/style.css':'style.css'};
-    if(req.method==='GET'&&files[u.pathname]){const name=files[u.pathname],type=name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8';return send(res,200,await readFile(new URL(name,publicDir)),type);}
-    send(res,404,{error:'Not found.'});
-  }catch(e){send(res,e.status||500,{error:e.status?e.message:'Unable to complete this request. Please retry.'});}
-});}
-if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){const port=Number(process.env.PORT)||3000,host=process.env.HOST||'0.0.0.0';createServer().listen(port,host,()=>console.log(`Movie Studio is ready at http://${host}:${port}`));}
+
+    if (req.method === 'POST' && u.pathname === '/api/embed') {
+      const b = await jsonBody(req), i = await imageBytes(b.url);
+      return send(res, 200, { url: `data:${i.mime};base64,${i.buffer.toString('base64')}` });
+    }
+
+    if (req.method === 'POST' && u.pathname === '/api/artwork.zip') {
+      const { assets } = await jsonBody(req);
+      if (!Array.isArray(assets) || !assets.length || assets.length > 60) throw fail('Choose between 1 and 60 images per ZIP.');
+      let JSZip;
+      try {
+        JSZip = (await dependency('jszip', 'MOVIESTUDIO_ZIP_MODULE')).default;
+      } catch {
+        throw fail('ZIP support is not installed. Run npm install.', 503);
+      }
+      const zip = new JSZip();
+      let total = 0;
+      for (const [n, a] of assets.entries()) {
+        const i = await imageBytes(a.url);
+        total += i.buffer.length;
+        if (total > 100 * 1024 * 1024) throw fail('This ZIP exceeds 100 MB. Download fewer images.');
+        const name = String(a.name || 'artwork').replace(/[^\p{L}\p{N}_-]/gu, '_').slice(0, 100);
+        zip.file(`${n + 1}_${name}.${i.mime.split('/')[1]}`, i.buffer);
+      }
+      res.setHeader('Content-Disposition', 'attachment; filename="movie-artwork.zip"');
+      return send(res, 200, await zip.generateAsync({ type: 'nodebuffer' }), 'application/zip');
+    }
+
+    const files = {
+      '/': 'index.html',
+      '/index.html': 'index.html',
+      '/app.mjs': 'app.mjs',
+      '/core.mjs': 'core.mjs',
+      '/style.css': 'style.css'
+    };
+
+    if (req.method === 'GET' && files[u.pathname]) {
+      const name = files[u.pathname];
+      const type = name.endsWith('.html') ? 'text/html; charset=utf-8' : name.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8';
+      const fileBuf = await readAssetFile(name);
+      return send(res, 200, fileBuf, type);
+    }
+
+    send(res, 404, { error: 'Not found.' });
+  } catch (e) {
+    send(res, e.status || 500, { error: e.status ? e.message : 'Unable to complete this request. Please retry.' });
+  }
+}
+
+export function createServer() {
+  return http.createServer(handleRequest);
+}
+
+export default handleRequest;
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const port = Number(process.env.PORT) || 3000, host = process.env.HOST || '0.0.0.0';
+  createServer().listen(port, host, () => console.log(`Movie Studio is ready at http://${host}:${port}`));
+}

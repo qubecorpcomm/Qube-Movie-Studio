@@ -506,6 +506,10 @@ function parseCPLBadges(cpl) {
 
 export function generateNewsletterHTML(movies, config = {}) {
   const accentColor = config.accentColor || '#2b6ef6';
+  const fontFamilyChoice = config.fontFamily || 'sans-serif';
+  const fontStack = fontFamilyChoice === 'serif' ? 'Georgia, serif' : fontFamilyChoice === 'monospace' ? "'Courier New', monospace" : 'Inter,Arial,Helvetica,sans-serif';
+  const isTwoColumn = config.layoutTemplate === 'two-column';
+
   const banner1Src = normalizeLink(config.topBannerUrl || config.banner1_src || 'https://i.ibb.co/5NfYmGx/QW-banner-new.jpg');
   const banner1Link = normalizeLink(config.topBannerLink || config.banner1_link || 'https://i.ibb.co/5NfYmGx/QW-banner-new.jpg');
   const banner2Src = normalizeLink(config.secondBannerUrl || config.banner2_src || 'https://i.ibb.co/spJ8m0Tg/02.jpg');
@@ -529,7 +533,7 @@ li.checked::marker { content: "\\2612"; }
   const movieList = Array.isArray(movies) ? movies : [];
   const activeMovies = movieList.filter(m => m && typeof m === 'object' && m.include !== false && m.checked !== false && m.selected !== false);
 
-  const movieCards = activeMovies.map(m => {
+  const cardList = activeMovies.map(m => {
     // 1. Trailer URL determination (evaluated first so poster and title can link to it)
     const rawTrailer = (m.trailer_mode === 'manual' ? (m.trailer_url || m.trailerUrl || m.trailer) : null)
       || m.trailer_url
@@ -720,7 +724,7 @@ ${cplBoxHtml}
 </table>
 <!--[if mso]></td></tr></table><![endif]-->
 </td></tr></table>`;
-  }).join('\n');
+  });
 
   // Banner 1 Row (omit if empty)
   let banner1Html = '';
@@ -746,10 +750,25 @@ ${wrappedImg2}
 </td></tr>`;
   }
 
+  let renderedHtml = '';
+  if (isTwoColumn && cardList.length > 1) {
+    const rows = [];
+    for (let i = 0; i < cardList.length; i += 2) {
+      const col1 = `<td width='50%' valign='top' style='padding:6px;width:50%;'>${cardList[i]}</td>`;
+      const col2 = cardList[i + 1]
+        ? `<td width='50%' valign='top' style='padding:6px;width:50%;'>${cardList[i + 1]}</td>`
+        : `<td width='50%' valign='top' style='padding:6px;width:50%;'></td>`;
+      rows.push(`<tr>${col1}${col2}</tr>`);
+    }
+    renderedHtml = `<table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='border-collapse:collapse;width:100%;'>${rows.join('\n')}</table>`;
+  } else {
+    renderedHtml = cardList.join('\n');
+  }
+
   return `<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 
     <style>
-    body { margin:0 !important; padding:0 !important; background-color:#f5f7fb; font-family:Inter,Arial,Helvetica,sans-serif; color:#0b1220; }
+    body { margin:0 !important; padding:0 !important; background-color:#f5f7fb; font-family:${fontStack}; color:#0b1220; }
     table { border-collapse:collapse; mso-table-lspace:0pt; mso-table-rspace:0pt; }
     img { border:0; height:auto; line-height:100%; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic; }
     a { text-decoration:none; color:#2b6ef6; }
@@ -761,8 +780,8 @@ ${wrappedImg2}
     }
     </style>
     
-</head><body>
-<table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='min-width:100%;border-collapse:collapse;'><tr><td align='center' style='padding:18px 0;'>
+</head><body style="font-family:${fontStack};">
+<table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='min-width:100%;border-collapse:collapse;font-family:${fontStack};'><tr><td align='center' style='padding:18px 0;'>
 <!--[if (gte mso 9)|(IE)]><table role="presentation" width="650" align="center" cellpadding="0" cellspacing="0" border="0" style="width:650px;"><tr><td><![endif]-->
 <table role='presentation' class='container-table' width='100%' cellpadding='0' cellspacing='0' style='max-width:650px;margin:0 auto;background:#ffffff;'>
 ${banner1Html}
@@ -771,7 +790,7 @@ ${banner1Html}
 <tr><td style='padding:0;'><div style='width:100%;height:10px;background:${accentColor};display:block;'></div></td></tr>
 ${banner2Html}
 <tr><td style='padding:10px 0;'>
-${movieCards}
+${renderedHtml}
 </td></tr>
 <tr><td style='padding:18px 20px;text-align:center;font-size:12px;color:#6b7280;'>${footerText}</td></tr>
 </table>
