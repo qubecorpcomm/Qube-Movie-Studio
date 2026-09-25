@@ -1,4 +1,4 @@
-import { parseMovieListText, generateNewsletterHTML, langCode } from './core.mjs';
+import { parseMovieListText, extractBulletinMetadata, generateNewsletterHTML, langCode } from './core.mjs';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js';
 import {
   getAuth,
@@ -58,26 +58,48 @@ function handleFirestoreError(error, operationType, path) {
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Application Shared State
+// Application Shared State with strict per-tool data isolation
 const state = {
-  movies: [],
-  selectedUid: null,
-  activeTab: 'library',
+  activeTab: 'artwork',
   status: { tmdb: false, youtube: false },
   batchRunning: false,
   stopBatchRequested: false,
-  filter: '',
+  artwork: {
+    movies: [],
+    selectedUid: null,
+    filter: ''
+  },
+  trailers: {
+    movies: [],
+    selectedUid: null,
+    filter: ''
+  },
   newsletter: {
-    title: 'This week at the movies',
-    intro: 'Discover the latest releases, with trailers and technical details in one place.',
-    topBannerUrl: '',
-    topBannerLink: '',
-    secondBannerUrl: '',
-    secondBannerLink: '',
-    footer: 'Movie Studio · Artwork and metadata provided by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.',
-    layoutTemplate: 'one-column'
+    movies: [],
+    selectedUid: null,
+    title: 'Theatrical Release & CPL Bulletin',
+    scheduleDate: 'September 24–30, 2026',
+    helpDeskPhone: '(424) 343-2691',
+    helpDeskEmail: 'support@qubewire.com',
+    intro: 'Keep tabs on the feature releases coming your way and plan your screening schedules seamlessly with our weekly theatrical report.',
+    topBannerUrl: 'https://i.ibb.co/5NfYmGx/QW-banner-new.jpg',
+    topBannerLink: 'https://www.qubewire.com',
+    secondBannerUrl: 'https://i.ibb.co/spJ8m0Tg/02.jpg',
+    secondBannerLink: 'https://www.qubewire.com',
+    footer: '© Qube Cinema Inc. / QubeWire. All rights reserved. For technical assistance or KDM inquiries, please contact our 24/7 Help Desk.',
+    layoutTemplate: 'theatrical-bulletin',
+    accentColor: '#2b6ef6',
+    fontFamily: 'sans-serif'
   }
 };
+
+// Helper to get display name for each tool
+function toolDisplayName(t) {
+  if (t === 'artwork') return 'Artwork Studio';
+  if (t === 'trailers') return 'Trailer Studio';
+  if (t === 'newsletter') return 'Newsletter Generator';
+  return 'Workspace';
+}
 
 // DOM Initialization
 document.addEventListener('DOMContentLoaded', () => {
@@ -86,10 +108,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initFirebase();
   setupNavigation();
   setupEventHandlers();
-
-  if (!state.selectedUid && state.movies.length > 0) {
-    state.selectedUid = state.movies[0].uid;
-  }
   updateAllUI();
 });
 
@@ -361,7 +379,8 @@ async function saveCurrentProjectToCloud() {
     projectId: projId,
     ownerId: currentUser.uid,
     name: projName,
-    movies: state.movies,
+    artwork: state.artwork,
+    trailers: state.trailers,
     newsletter: state.newsletter,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -380,13 +399,29 @@ function loadCloudProject(projId) {
   const proj = cloudProjects.find(p => p.id === projId);
   if (!proj) return;
 
-  if (state.movies.length > 0) {
+  const totalCurrent = (state.artwork?.movies?.length || 0) + (state.trailers?.movies?.length || 0) + (state.newsletter?.movies?.length || 0);
+  if (totalCurrent > 0) {
     if (!confirm(`Replace current workspace with cloud project "${proj.name}"?`)) return;
   }
 
-  if (Array.isArray(proj.movies)) state.movies = proj.movies;
-  if (proj.newsletter) state.newsletter = { ...state.newsletter, ...proj.newsletter };
-  state.selectedUid = state.movies[0]?.uid || null;
+  if (proj.artwork && Array.isArray(proj.artwork.movies)) {
+    state.artwork = proj.artwork;
+  }
+  if (proj.trailers && Array.isArray(proj.trailers.movies)) {
+    state.trailers = proj.trailers;
+  }
+  if (proj.newsletter) {
+    state.newsletter = { ...state.newsletter, ...proj.newsletter };
+  }
+  // Backwards compatibility with v1
+  if (Array.isArray(proj.movies)) {
+    state.artwork.movies = proj.movies;
+    state.artwork.selectedUid = proj.movies[0]?.uid || null;
+  }
+
+  if (!Array.isArray(state.artwork?.movies)) state.artwork = { movies: [], selectedUid: null };
+  if (!Array.isArray(state.trailers?.movies)) state.trailers = { movies: [], selectedUid: null };
+  if (!Array.isArray(state.newsletter?.movies)) state.newsletter.movies = [];
 
   saveLocalState();
   updateAllUI();
@@ -438,16 +473,15 @@ function setActiveTab(tab) {
   const pageSub = document.getElementById('pageSub');
 
   const titles = {
-    library: { path: 'MOVIE STUDIO / LIBRARY', h1: 'Your movie library', dot: '.', sub: 'Bring in your titles. Find the artwork. Build something worth opening.' },
-    artwork: { path: 'MOVIE STUDIO / ARTWORK', h1: 'The art of the release', dot: '.', sub: 'Choose posters, backdrops and logos in the language that fits.' },
-    trailers: { path: 'MOVIE STUDIO / TRAILERS', h1: 'Let the story begin', dot: '.', sub: 'Find the right trailer, review alternatives, or add your own link.' },
-    newsletter: { path: 'MOVIE STUDIO / NEWSLETTER', h1: 'Ready for the inbox', dot: '.', sub: 'Turn your curated movie list into a newsletter worth opening.' }
+    artwork: { path: 'MOVIE STUDIO / ARTWORK', h1: 'Posters & Artwork Studio', dot: '.', sub: 'Import titles or upload PDF reports to find and select posters, backdrops, and logos.' },
+    trailers: { path: 'MOVIE STUDIO / TRAILERS', h1: 'Trailers & Teasers Studio', dot: '.', sub: 'Import titles or upload PDF reports to discover official trailers and video clips.' },
+    newsletter: { path: 'MOVIE STUDIO / NEWSLETTER', h1: 'Newsletter Generator', dot: '.', sub: 'Import titles or upload PDF reports to generate custom HTML email newsletters.' }
   };
 
-  const t = titles[tab] || titles.library;
-  bcPath.textContent = t.path;
-  pageTitle.innerHTML = `${t.h1}<span class="period-dot">${t.dot}</span>`;
-  pageSub.textContent = t.sub;
+  const t = titles[tab] || titles.artwork;
+  if (bcPath) bcPath.textContent = t.path;
+  if (pageTitle) pageTitle.innerHTML = `${t.h1}<span class="period-dot">${t.dot}</span>`;
+  if (pageSub) pageSub.textContent = t.sub;
 
   updateAllUI();
 }
@@ -455,65 +489,138 @@ function setActiveTab(tab) {
 // Notice Bar Update
 function showNotice(msg, type = 'info') {
   const bar = document.getElementById('noticeBar');
-  bar.textContent = msg;
-  bar.className = `notice-bar ${type}`;
+  if (bar) {
+    bar.textContent = msg;
+    bar.className = `notice-bar ${type}`;
+  }
 }
 
 // Global Event Handlers Setup
 function setupEventHandlers() {
-  // Focus textarea
-  document.getElementById('btnAddMovieFocus').addEventListener('click', () => {
-    setActiveTab('library');
-    const textarea = document.getElementById('movieInputText');
-    textarea.focus();
-  });
+  // Focus active tool's input textarea
+  const btnAddFocus = document.getElementById('btnAddMovieFocus');
+  if (btnAddFocus) {
+    btnAddFocus.addEventListener('click', () => {
+      let inputId = 'artworkInputText';
+      if (state.activeTab === 'trailers') inputId = 'trailersInputText';
+      if (state.activeTab === 'newsletter') inputId = 'newsletterInputText';
+      const el = document.getElementById(inputId);
+      if (el) el.focus();
+    });
+  }
 
-  // Add titles
-  document.getElementById('btnAddTitles').addEventListener('click', () => {
-    const text = document.getElementById('movieInputText').value;
-    const parsed = parseMovieListText(text);
-    if (parsed.length > 0) {
-      addMoviesFromParsedList(parsed);
-      document.getElementById('movieInputText').value = '';
-      showNotice(`Added ${parsed.length} movie(s) to your library.`);
-    } else {
-      showNotice('Please enter movie titles or paste a list.', 'error');
+  // Bind title addition per tool (strict per-panel isolation)
+  const bindAddTitles = (btnId, inputId, toolName, toolKey) => {
+    const btn = document.getElementById(btnId);
+    const input = document.getElementById(inputId);
+    if (btn && input) {
+      btn.addEventListener('click', () => {
+        const text = input.value;
+        const parsed = parseMovieListText(text);
+        if (parsed.length > 0) {
+          addMoviesToTool(parsed, toolKey);
+          input.value = '';
+          showNotice(`Added ${parsed.length} title(s) to ${toolName} only.`);
+          if (toolKey === 'newsletter') {
+            const bulletinMeta = extractBulletinMetadata(text);
+            if (bulletinMeta) {
+              if (bulletinMeta.scheduleDate) {
+                state.newsletter.scheduleDate = bulletinMeta.scheduleDate;
+                const schedEl = document.getElementById('nlScheduleDate');
+                if (schedEl) schedEl.value = bulletinMeta.scheduleDate;
+                state.newsletter.title = `Theatrical Release Bulletin: ${bulletinMeta.scheduleDate}`;
+                const titleEl = document.getElementById('nlTitle');
+                if (titleEl) titleEl.value = state.newsletter.title;
+              }
+              if (bulletinMeta.helpDeskPhone) {
+                state.newsletter.helpDeskPhone = bulletinMeta.helpDeskPhone;
+                const phoneEl = document.getElementById('nlHelpDeskPhone');
+                if (phoneEl) phoneEl.value = bulletinMeta.helpDeskPhone;
+              }
+              if (bulletinMeta.helpDeskEmail) {
+                state.newsletter.helpDeskEmail = bulletinMeta.helpDeskEmail;
+                const emailEl = document.getElementById('nlHelpDeskEmail');
+                if (emailEl) emailEl.value = bulletinMeta.helpDeskEmail;
+              }
+            }
+            renderNewsletterMovieList();
+            renderNewsletterPreview();
+            if (state.status.tmdb) {
+              const unsearched = state.newsletter.movies.filter(m => !m.selectedPoster && !m.posterUrl);
+              if (unsearched.length > 0) {
+                (async () => {
+                  for (const m of unsearched) {
+                    await fetchMovieMetadata(m);
+                    renderNewsletterPreview();
+                    renderNewsletterMovieList();
+                  }
+                })();
+              }
+            }
+          }
+        } else {
+          showNotice('Please enter movie titles or paste a list.', 'error');
+        }
+      });
     }
-  });
+  };
 
-  // File import (.txt, .csv, .pdf)
-  const fileImportInput = document.getElementById('fileImportInput');
-  document.getElementById('btnImportFile').addEventListener('click', () => fileImportInput.click());
-  fileImportInput.addEventListener('change', handleFileImport);
+  bindAddTitles('btnAddTitlesArtwork', 'artworkInputText', 'Artwork Studio', 'artwork');
+  bindAddTitles('btnAddTitlesTrailers', 'trailersInputText', 'Trailer Studio', 'trailers');
+  bindAddTitles('btnAddTitlesNewsletter', 'newsletterInputText', 'Newsletter Generator', 'newsletter');
 
-  // Batch search button
-  document.getElementById('btnFindArtworkAll').addEventListener('click', runBatchSearch);
+  // Bind file import per tool (strict per-panel isolation)
+  const bindFileImport = (btnId, fileInputId, toolKey) => {
+    const btn = document.getElementById(btnId);
+    const fileInput = document.getElementById(fileInputId);
+    if (btn && fileInput) {
+      btn.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', (e) => handleFileImport(e, toolKey));
+    }
+  };
+
+  bindFileImport('btnImportFileArtwork', 'fileImportInputArtwork', 'artwork');
+  bindFileImport('btnImportFileTrailers', 'fileImportInputTrailers', 'trailers');
+  bindFileImport('btnImportFileNewsletter', 'fileImportInputNewsletter', 'newsletter');
+  bindFileImport('btnNlImportFile', 'fileNlImportInput', 'newsletter');
+
+  // Batch search buttons
+  const btnFindArt = document.getElementById('btnFindArtworkAll');
+  if (btnFindArt) btnFindArt.addEventListener('click', () => runBatchSearch('artwork'));
   const btnFindTrailers = document.getElementById('btnFindTrailersAll');
-  if (btnFindTrailers) btnFindTrailers.addEventListener('click', runBatchSearch);
+  if (btnFindTrailers) btnFindTrailers.addEventListener('click', () => runBatchSearch('trailers'));
 
   // Stop batch
   const btnStopBatch = document.getElementById('btnStopBatch');
-  btnStopBatch.addEventListener('click', () => {
-    state.stopBatchRequested = true;
-    showNotice('Stopping batch search after current item...');
-  });
+  if (btnStopBatch) {
+    btnStopBatch.addEventListener('click', () => {
+      state.stopBatchRequested = true;
+      showNotice('Stopping batch search after current item...');
+    });
+  }
 
-  // Filter inputs
-  ['movieFilterInput', 'movieFilterInputArtwork', 'movieFilterInputTrailers'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.addEventListener('input', (e) => {
-        state.filter = e.target.value.toLowerCase();
-        renderCollectionList();
-      });
-    }
-  });
+  // Tool-specific Filter inputs
+  const filterArt = document.getElementById('movieFilterInputArtwork');
+  if (filterArt) {
+    filterArt.addEventListener('input', (e) => {
+      state.artwork.filter = e.target.value.toLowerCase();
+      renderCollectionList();
+    });
+  }
 
-  // Export CSV
-  ['btnExportCSV', 'btnExportCSVArtwork', 'btnExportCSVTrailers'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('click', exportCSVReport);
-  });
+  const filterTrl = document.getElementById('movieFilterInputTrailers');
+  if (filterTrl) {
+    filterTrl.addEventListener('input', (e) => {
+      state.trailers.filter = e.target.value.toLowerCase();
+      renderCollectionList();
+    });
+  }
+
+  // Export CSV per tool
+  const btnCsvArt = document.getElementById('btnExportCSVArtwork');
+  if (btnCsvArt) btnCsvArt.addEventListener('click', () => exportCSVReport('artwork'));
+  const btnCsvTrl = document.getElementById('btnExportCSVTrailers');
+  if (btnCsvTrl) btnCsvTrl.addEventListener('click', () => exportCSVReport('trailers'));
 
   // Download ZIP
   const btnZip = document.getElementById('btnDownloadZipTop');
@@ -566,64 +673,142 @@ function setupEventHandlers() {
   setupNewsletterSync();
 }
 
-// Add Movies to Shared State
-function addMoviesFromParsedList(parsedList) {
-  const newItems = parsedList.map(item => ({
-    uid: 'm_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-    id: item.imdbId || null,
-    title: item.title,
-    year: item.year || '',
-    language: item.language || '',
-    distributor: item.distributor || '',
-    posterUrl: '',
-    trailerUrl: '',
-    selectedPoster: null,
-    selectedBackdrop: null,
-    selectedLogo: null,
-    selectedTrailer: null,
-    keepPoster: false,
-    keepTrailer: false,
-    overview: item.overview || '',
-    featureDuration: item.featureDuration || '',
-    cplPart1Duration: item.cplPart1Duration || '',
-    cplPart2Duration: item.cplPart2Duration || '',
-    firstFrameEndCredits: item.firstFrameEndCredits || '',
-    firstFrameMovingCredits: item.firstFrameMovingCredits || '',
-    cplEntries: item.cplEntries || '',
-    images: { poster: [], backdrop: [], logo: [] },
-    videos: [],
-    tmdbCandidates: [],
-    status: 'pending',
-    statusText: 'Pending',
-    checked: true
-  }));
+// Add Movies strictly to the target tool's isolated state
+function addMoviesToTool(parsedList, tool = state.activeTab) {
+  if (!tool) tool = 'artwork';
+  if (!state[tool]) {
+    state[tool] = { movies: [], selectedUid: null, filter: '' };
+  }
+  const toolState = state[tool];
+  if (!Array.isArray(toolState.movies)) {
+    toolState.movies = [];
+  }
+  if (!Array.isArray(parsedList)) return;
 
-  state.movies.push(...newItems);
-  if (!state.selectedUid && state.movies.length > 0) {
-    state.selectedUid = state.movies[0].uid;
+  const newItems = parsedList.map(item => {
+    if (!item || typeof item !== 'object') return null;
+    // Cross-reference existing poster/trailer from other tabs if not present
+    let crossPoster = item.poster_url || item.poster_remote || item.posterUrl || item.selectedPoster || '';
+    let crossTrailer = item.trailer_url || item.trailerUrl || item.selectedTrailer || '';
+
+    if (!crossPoster || !crossTrailer) {
+      const crossPool = [...(state.artwork?.movies || []), ...(state.trailers?.movies || []), ...(state.newsletter?.movies || [])];
+      const match = crossPool.find(m => m && m.title && item.title && m.title.toLowerCase().trim() === item.title.toLowerCase().trim());
+      if (match) {
+        if (!crossPoster) {
+          crossPoster = match.selectedPoster || match.posterUrl || match.poster_url || match.images?.poster?.[0]?.url || '';
+        }
+        if (!crossTrailer) {
+          crossTrailer = match.selectedTrailer || match.trailerUrl || match.trailer_url || (match.videos && match.videos[0]?.url) || '';
+        }
+      }
+    }
+
+    const featureDur = item.feature_duration || item.featureDuration || '';
+    const p1Dur = item.cpl_part1_duration || item.cplPart1Duration || '';
+    const p2Dur = item.cpl_part2_duration || item.cplPart2Duration || '';
+    const ffec = item.first_frame_end_credits || item.firstFrameEndCredits || '';
+    const ffmc = item.first_frame_moving_credits || item.firstFrameMovingCredits || '';
+
+    return {
+      ...item,
+      uid: item.uid || ('m_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)),
+      id: item.id || item.imdbId || null,
+      imdb_id: item.imdb_id || item.imdbId || null,
+      title: item.title,
+      year: item.year || '',
+      language: item.language || '',
+      distributor: item.distributor || '',
+      poster_url: crossPoster || '',
+      poster_remote: item.poster_remote || crossPoster || '',
+      posterUrl: crossPoster || '',
+      selectedPoster: crossPoster || null,
+      selectedBackdrop: item.selectedBackdrop || null,
+      selectedLogo: item.selectedLogo || null,
+      trailer_url: crossTrailer || '',
+      trailerUrl: crossTrailer || '',
+      selectedTrailer: crossTrailer || null,
+      keepPoster: item.keepPoster || false,
+      keepTrailer: item.keepTrailer || false,
+      overview: item.overview || '',
+      feature_duration: featureDur,
+      featureDuration: featureDur,
+      cpl_part1_duration: p1Dur,
+      cplPart1Duration: p1Dur,
+      cpl_part2_duration: p2Dur,
+      cplPart2Duration: p2Dur,
+      first_frame_end_credits: ffec,
+      firstFrameEndCredits: ffec,
+      first_frame_moving_credits: ffmc,
+      firstFrameMovingCredits: ffmc,
+      cpls: item.cpls || [],
+      cplEntries: item.cplEntries || (Array.isArray(item.cpls) ? item.cpls.map(c => typeof c === 'string' ? c : (c.name ? `${c.name}${c.part ? ' - ' + c.part : ''}` : '')).filter(Boolean).join('\n') : ''),
+      raw_block: item.raw_block || [],
+      poster_mode: item.poster_mode || (crossPoster ? 'manual' : 'auto'),
+      trailer_mode: item.trailer_mode || (crossTrailer ? 'manual' : 'auto'),
+      images: item.images || { poster: [], backdrop: [], logo: [] },
+      videos: item.videos || [],
+      tmdbCandidates: item.tmdbCandidates || [],
+      status: item.status || 'pending',
+      statusText: item.statusText || 'Pending',
+      checked: item.checked !== false,
+      include: item.include !== false
+    };
+  }).filter(Boolean);
+
+  toolState.movies.push(...newItems);
+  if (!toolState.selectedUid && toolState.movies.length > 0) {
+    toolState.selectedUid = toolState.movies[0].uid;
   }
 
   updateAllUI();
   saveLocalState();
 }
 
+// Backward-compatibility alias
+function addMoviesFromParsedList(parsedList) {
+  addMoviesToTool(parsedList, state.activeTab);
+}
+
 // Update All Workspace Views & Counters
 function updateAllUI() {
-  const total = state.movies.length;
-  const artworkCount = state.movies.filter(m => m.selectedPoster || m.posterUrl).length;
-  const trailerCount = state.movies.filter(m => m.selectedTrailer || m.trailerUrl || (m.videos && m.videos.length > 0)).length;
-  const includedInNewsletter = state.movies.filter(m => m.checked !== false).length;
+  if (!state.artwork) state.artwork = { movies: [] };
+  if (!Array.isArray(state.artwork.movies)) state.artwork.movies = [];
+  if (!state.trailers) state.trailers = { movies: [] };
+  if (!Array.isArray(state.trailers.movies)) state.trailers.movies = [];
+  if (!state.newsletter) state.newsletter = { movies: [] };
+  if (!Array.isArray(state.newsletter.movies)) state.newsletter.movies = [];
+
+  const artworkTotal = state.artwork.movies.length;
+  const artworkPosters = state.artwork.movies.filter(m => m && (m.selectedPoster || m.posterUrl)).length;
+  const trailersTotal = state.trailers.movies.length;
+  const trailersReady = state.trailers.movies.filter(m => m && (m.selectedTrailer || m.trailerUrl || (m.videos && m.videos.length > 0))).length;
+  const newsletterTotal = state.newsletter.movies.length;
+  const newsletterIncluded = state.newsletter.movies.filter(m => m && m.checked !== false).length;
 
   // Badges
-  document.getElementById('badgeMovieCount').textContent = total;
-  document.getElementById('badgeArtworkCount').textContent = artworkCount;
-  document.getElementById('badgeTrailerCount').textContent = trailerCount;
+  const bMovie = document.getElementById('badgeMovieCount');
+  if (bMovie) bMovie.textContent = state[state.activeTab]?.movies?.length || 0;
+  const bArtwork = document.getElementById('badgeArtworkCount');
+  if (bArtwork) bArtwork.textContent = artworkTotal;
+  const bTrailers = document.getElementById('badgeTrailerCount');
+  if (bTrailers) bTrailers.textContent = trailersTotal;
+  const bNewsletter = document.getElementById('badgeNewsletterCount');
+  if (bNewsletter) bNewsletter.textContent = newsletterTotal;
 
   // Metrics Strip
-  document.getElementById('metricMovies').textContent = total;
-  document.getElementById('metricArtwork').textContent = artworkCount;
-  document.getElementById('metricTrailers').textContent = trailerCount;
-  document.getElementById('metricNewsletter').textContent = includedInNewsletter;
+  const mMovies = document.getElementById('metricMovies');
+  if (mMovies) {
+    if (state.activeTab === 'artwork') mMovies.textContent = artworkTotal;
+    else if (state.activeTab === 'trailers') mMovies.textContent = trailersTotal;
+    else mMovies.textContent = newsletterTotal;
+  }
+  const mArtwork = document.getElementById('metricArtwork');
+  if (mArtwork) mArtwork.textContent = artworkPosters;
+  const mTrailers = document.getElementById('metricTrailers');
+  if (mTrailers) mTrailers.textContent = trailersReady;
+  const mNL = document.getElementById('metricNewsletter');
+  if (mNL) mNL.textContent = newsletterIncluded;
 
   renderCollectionList();
   renderSelectedMovieDetail();
@@ -632,45 +817,57 @@ function updateAllUI() {
   saveLocalState();
 }
 
-// Render Collection List in Current Active View
+// Render Collection List in Current Active View with strict panel isolation
 function renderCollectionList() {
-  const containers = [
-    { listId: 'libraryList', countId: 'filterCount', inputId: 'movieFilterInput' },
-    { listId: 'libraryListArtwork', countId: 'filterCountArtwork', inputId: 'movieFilterInputArtwork' },
-    { listId: 'libraryListTrailers', countId: 'filterCountTrailers', inputId: 'movieFilterInputTrailers' }
+  const panels = [
+    {
+      tool: 'artwork',
+      listId: 'libraryListArtwork',
+      countId: 'filterCountArtwork',
+      inputId: 'movieFilterInputArtwork'
+    },
+    {
+      tool: 'trailers',
+      listId: 'libraryListTrailers',
+      countId: 'filterCountTrailers',
+      inputId: 'movieFilterInputTrailers'
+    }
   ];
 
-  const filteredMovies = state.movies.filter(m => {
-    if (!state.filter) return true;
-    return m.title.toLowerCase().includes(state.filter) ||
-           (m.year && m.year.includes(state.filter)) ||
-           (m.language && m.language.toLowerCase().includes(state.filter));
-  });
+  panels.forEach(({ tool, listId, countId, inputId }) => {
+    const toolState = state[tool];
+    if (!toolState) return;
 
-  containers.forEach(({ listId, countId, inputId }) => {
     const listEl = document.getElementById(listId);
     const countEl = document.getElementById(countId);
     const inputEl = document.getElementById(inputId);
 
-    if (inputEl && inputEl.value.toLowerCase() !== state.filter) {
-      inputEl.value = state.filter;
+    const filtered = toolState.movies.filter(m => {
+      if (!toolState.filter) return true;
+      return m.title.toLowerCase().includes(toolState.filter) ||
+             (m.year && m.year.includes(toolState.filter)) ||
+             (m.language && m.language.toLowerCase().includes(toolState.filter));
+    });
+
+    if (inputEl && inputEl.value.toLowerCase() !== toolState.filter) {
+      inputEl.value = toolState.filter;
     }
 
-    if (countEl) countEl.textContent = `${filteredMovies.length} movies`;
+    if (countEl) countEl.textContent = `${filtered.length} movies`;
     if (!listEl) return;
 
-    if (state.movies.length === 0) {
+    if (toolState.movies.length === 0) {
       listEl.innerHTML = `
         <div class="empty-state">
           <div class="empty-icon">＋</div>
-          <div class="empty-title">Your collection starts here</div>
-          <div class="empty-desc">Paste a list above or add a movie.</div>
+          <div class="empty-title">Your ${tool === 'artwork' ? 'Artwork' : 'Trailer'} collection starts here</div>
+          <div class="empty-desc">Paste a list above or upload a report for this tool.</div>
         </div>
       `;
       return;
     }
 
-    if (filteredMovies.length === 0) {
+    if (filtered.length === 0) {
       listEl.innerHTML = `
         <div class="empty-state">
           <div class="empty-title">No matching movies</div>
@@ -681,20 +878,19 @@ function renderCollectionList() {
     }
 
     listEl.innerHTML = '';
-    filteredMovies.forEach(m => {
+    filtered.forEach(m => {
       const row = document.createElement('div');
-      row.className = `movie-row ${m.uid === state.selectedUid ? 'active' : ''}`;
+      row.className = `movie-row ${m.uid === toolState.selectedUid ? 'active' : ''}`;
       row.tabIndex = 0;
       row.role = 'button';
       row.setAttribute('aria-label', `Select ${m.title}`);
 
       const posterUrl = m.posterUrl || m.selectedPoster || m.images?.poster?.[0]?.url;
       const initialLetter = m.title ? m.title.charAt(0).toUpperCase() : 'M';
-
       const statusClass = m.status === 'found' ? 'found' : m.status === 'loading' ? 'loading' : m.status === 'error' ? 'error' : '';
 
       row.innerHTML = `
-        <input type="checkbox" class="movie-checkbox" ${m.checked !== false ? 'checked' : ''} aria-label="Include ${m.title} in newsletter and batch actions" />
+        <input type="checkbox" class="movie-checkbox" ${m.checked !== false ? 'checked' : ''} aria-label="Include ${m.title}" />
         ${posterUrl ? `<img src="${posterUrl}" class="movie-poster-img" alt="${m.title}" />` : `<div class="movie-poster-thumb">${initialLetter}</div>`}
         <div class="movie-info-block">
           <div class="movie-row-title">${m.title}</div>
@@ -713,7 +909,7 @@ function renderCollectionList() {
 
       // Row select click
       row.addEventListener('click', () => {
-        state.selectedUid = m.uid;
+        toolState.selectedUid = m.uid;
         updateAllUI();
       });
 
@@ -721,7 +917,7 @@ function renderCollectionList() {
       row.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          state.selectedUid = m.uid;
+          toolState.selectedUid = m.uid;
           updateAllUI();
         }
       });
@@ -731,33 +927,39 @@ function renderCollectionList() {
   });
 }
 
-// Render Selected Movie Detail Panel
+// Render Selected Movie Detail Panel strictly per tool
 function renderSelectedMovieDetail() {
   const cards = [
-    document.getElementById('movieDetailCard'),
-    document.getElementById('movieDetailCardArtwork'),
-    document.getElementById('movieDetailCardTrailers')
+    {
+      tool: 'artwork',
+      card: document.getElementById('movieDetailCardArtwork')
+    },
+    {
+      tool: 'trailers',
+      card: document.getElementById('movieDetailCardTrailers')
+    }
   ];
 
-  const m = state.movies.find(item => item.uid === state.selectedUid);
-
-  cards.forEach((card, idx) => {
+  cards.forEach(({ tool, card }) => {
     if (!card) return;
+    const toolState = state[tool];
+    if (!toolState) return;
+
+    const m = toolState.movies.find(item => item.uid === toolState.selectedUid);
 
     if (!m) {
       card.innerHTML = `
         <div class="empty-state">
           <div class="empty-icon">✦</div>
           <div class="empty-title">A place for your next release</div>
-          <div class="empty-desc">${state.movies.length > 0 ? 'Select a movie from the list to choose artwork and trailers.' : 'Add a movie, then select it here to choose artwork and trailers.'}</div>
+          <div class="empty-desc">${toolState.movies.length > 0 ? `Select a movie from the ${toolDisplayName(tool)} list.` : `Add or upload movies to ${toolDisplayName(tool)} above.`}</div>
         </div>
       `;
       return;
     }
 
-    const tabType = idx === 0 ? 'library' : idx === 1 ? 'artwork' : 'trailers';
-    card.innerHTML = buildDetailCardHTML(m, tabType);
-    bindDetailCardEvents(card, m);
+    card.innerHTML = buildDetailCardHTML(m, tool);
+    bindDetailCardEvents(card, m, tool);
   });
 }
 
@@ -983,15 +1185,15 @@ function buildDetailCardHTML(m, tabType) {
 }
 
 // Bind Detail Card Interactive Events
-function bindDetailCardEvents(card, m) {
+function bindDetailCardEvents(card, m, tool = 'artwork') {
   // Reorder / remove
   const btnUp = card.querySelector('#btnMoveUp');
   const btnDown = card.querySelector('#btnMoveDown');
   const btnRemove = card.querySelector('#btnRemoveMovie');
 
-  if (btnUp) btnUp.addEventListener('click', () => moveMovieOrder(m.uid, -1));
-  if (btnDown) btnDown.addEventListener('click', () => moveMovieOrder(m.uid, 1));
-  if (btnRemove) btnRemove.addEventListener('click', () => promptRemoveMovie(m));
+  if (btnUp) btnUp.addEventListener('click', () => moveMovieOrder(m.uid, -1, tool));
+  if (btnDown) btnDown.addEventListener('click', () => moveMovieOrder(m.uid, 1, tool));
+  if (btnRemove) btnRemove.addEventListener('click', () => promptRemoveMovie(m, tool));
 
   // Search single
   const btnSearchSingle = card.querySelector('#btnSearchSingle');
@@ -1108,7 +1310,7 @@ function bindDetailCardEvents(card, m) {
       m.firstFrameMovingCredits = card.querySelector('#inputFirstFrameMoving').value.trim();
       m.cplEntries = card.querySelector('#inputCplEntries').value.trim();
 
-      showNotice('Movie details updated across your workspace.');
+      showNotice(`Movie details updated in ${toolDisplayName(tool)}.`);
       updateAllUI();
     });
   }
@@ -1169,14 +1371,24 @@ async function loadMovieDetailFromTMDB(m, tmdbId) {
     m.videos = data.videos || [];
 
     if (!m.keepPoster) {
-      m.selectedPoster = m.images.poster?.[0]?.url || null;
+      const pUrl = m.images.poster?.[0]?.url || null;
+      m.selectedPoster = pUrl;
       m.selectedBackdrop = m.images.backdrop?.[0]?.url || null;
       m.selectedLogo = m.images.logo?.[0]?.url || null;
+      if (pUrl) {
+        m.poster_url = pUrl;
+        m.posterUrl = pUrl;
+        m.poster_remote = pUrl;
+      }
     }
 
     if (!m.keepTrailer) {
-      m.selectedTrailer = m.videos?.[0]?.url || null;
-      m.trailerUrl = m.selectedTrailer;
+      const tUrl = m.videos?.[0]?.url || null;
+      m.selectedTrailer = tUrl;
+      if (tUrl) {
+        m.trailerUrl = tUrl;
+        m.trailer_url = tUrl;
+      }
     }
 
     m.status = 'found';
@@ -1189,11 +1401,14 @@ async function loadMovieDetailFromTMDB(m, tmdbId) {
   updateAllUI();
 }
 
-// Run Sequential Batch Search
-async function runBatchSearch() {
-  const checkedMovies = state.movies.filter(m => m.checked !== false);
+// Run Sequential Batch Search strictly within the targeted tool
+async function runBatchSearch(tool = state.activeTab) {
+  const toolState = state[tool];
+  if (!toolState) return;
+
+  const checkedMovies = toolState.movies.filter(m => m.checked !== false);
   if (checkedMovies.length === 0) {
-    showNotice('No movies selected for batch search.', 'error');
+    showNotice(`No movies selected for batch search in ${toolDisplayName(tool)}.`, 'error');
     return;
   }
 
@@ -1217,7 +1432,7 @@ async function runBatchSearch() {
     }
 
     const m = checkedMovies[i];
-    showNotice(`Searching ${i + 1} of ${checkedMovies.length}: ${m.title}`);
+    showNotice(`Searching ${i + 1} of ${checkedMovies.length} in ${toolDisplayName(tool)}: ${m.title}`);
     
     const success = await fetchMovieMetadata(m);
     if (success) processed++; else failed++;
@@ -1225,39 +1440,45 @@ async function runBatchSearch() {
 
   state.batchRunning = false;
   if (btnStop) btnStop.classList.add('hidden');
-  showNotice(`Search finished: ${processed} processed, ${failed} failed.`);
+  showNotice(`Search finished for ${toolDisplayName(tool)}: ${processed} processed, ${failed} failed.`);
 }
 
-// Reorder Movie
-function moveMovieOrder(uid, delta) {
-  const idx = state.movies.findIndex(m => m.uid === uid);
+// Reorder Movie in specific tool
+function moveMovieOrder(uid, delta, tool = state.activeTab) {
+  const toolState = state[tool];
+  if (!toolState) return;
+
+  const idx = toolState.movies.findIndex(m => m.uid === uid);
   if (idx < 0) return;
 
   const targetIdx = idx + delta;
-  if (targetIdx < 0 || targetIdx >= state.movies.length) return;
+  if (targetIdx < 0 || targetIdx >= toolState.movies.length) return;
 
-  const temp = state.movies[idx];
-  state.movies[idx] = state.movies[targetIdx];
-  state.movies[targetIdx] = temp;
+  const temp = toolState.movies[idx];
+  toolState.movies[idx] = toolState.movies[targetIdx];
+  toolState.movies[targetIdx] = temp;
 
   updateAllUI();
 }
 
-// Prompt Remove Movie Modal
-function promptRemoveMovie(m) {
+// Prompt Remove Movie Modal for specific tool
+function promptRemoveMovie(m, tool = state.activeTab) {
   const modal = document.getElementById('confirmModal');
   const msg = document.getElementById('confirmModalMessage');
-  msg.textContent = `Are you sure you want to remove "${m.title}" from your library?`;
+  msg.textContent = `Are you sure you want to remove "${m.title}" from ${toolDisplayName(tool)}?`;
 
   const btnAccept = document.getElementById('btnAcceptConfirmModal');
   const onAccept = () => {
-    state.movies = state.movies.filter(item => item.uid !== m.uid);
-    if (state.selectedUid === m.uid) {
-      state.selectedUid = state.movies[0]?.uid || null;
+    const toolState = state[tool];
+    if (toolState) {
+      toolState.movies = toolState.movies.filter(item => item.uid !== m.uid);
+      if (toolState.selectedUid === m.uid) {
+        toolState.selectedUid = toolState.movies[0]?.uid || null;
+      }
     }
     closeConfirmModal();
     btnAccept.removeEventListener('click', onAccept);
-    showNotice(`Removed "${m.title}".`);
+    showNotice(`Removed "${m.title}" from ${toolDisplayName(tool)}.`);
     updateAllUI();
   };
 
@@ -1270,21 +1491,32 @@ function closeConfirmModal() {
   modal.close();
 }
 
-// File Import Handler (.txt, .csv, .pdf)
-async function handleFileImport(e) {
+// File Import Handler strictly targeted per tool
+async function handleFileImport(e, toolTarget) {
   const file = e.target.files[0];
   if (!file) return;
+
+  const targetTool = toolTarget || state.activeTab || 'artwork';
 
   if (file.size > 10 * 1024 * 1024) {
     showNotice('File exceeds 10 MB limit.', 'error');
     return;
   }
 
-  showNotice(`Reading file "${file.name}"...`);
+  showNotice(`Reading file "${file.name}" for ${toolDisplayName(targetTool)}...`);
 
   try {
     let text = '';
-    if (file.name.toLowerCase().endsWith('.pdf')) {
+    const isPdf = file.name.toLowerCase().endsWith('.pdf');
+    if (isPdf) {
+      if (targetTool === 'newsletter' && state.newsletter?.movies && state.newsletter.movies.length > 0) {
+        const replace = window.confirm('Replace current newsletter movies with those from the PDF?');
+        if (!replace) {
+          e.target.value = '';
+          return;
+        }
+      }
+
       const buffer = await file.arrayBuffer();
       const res = await fetch('/api/pdf', {
         method: 'POST',
@@ -1299,53 +1531,265 @@ async function handleFileImport(e) {
         const rawErr = await res.text();
         throw new Error(`Server returned ${res.status}: ${rawErr.replace(/<[^>]*>?/gm, '').trim().slice(0, 80)}`);
       }
-      if (!res.ok) throw new Error(data.error || 'Failed to extract text from PDF.');
+      if (!res.ok) {
+        if (data.error && data.error.includes('OCR')) {
+          throw new Error('This PDF has no selectable text (scan). It needs OCR first.');
+        }
+        throw new Error(data.error || 'Failed to extract text from PDF.');
+      }
       text = data.text || '';
     } else {
       text = await file.text();
     }
 
-    const parsed = parseMovieListText(text);
-    if (parsed.length > 0) {
-      addMoviesFromParsedList(parsed);
-      showNotice(`Successfully imported ${parsed.length} titles from ${file.name}.`);
+    let parsed = [];
+    try {
+      parsed = parseMovieListText(text) || [];
+    } catch (parseErr) {
+      console.warn('PDF or text parsing error:', parseErr);
+      showNotice('Error parsing movie list from file.', 'error');
+      return;
+    }
+
+    // Defensive check to handle cases where targetTool state or movies array is missing/undefined
+    if (!state[targetTool] || !Array.isArray(state[targetTool]?.movies)) {
+      if (!state[targetTool]) state[targetTool] = {};
+      state[targetTool].movies = [];
+    }
+
+    if (parsed && Array.isArray(parsed) && parsed.length > 0) {
+      if (targetTool === 'newsletter' && isPdf) {
+        if (!state.newsletter) state.newsletter = {};
+        state.newsletter.movies = [];
+      }
+      addMoviesToTool(parsed, targetTool);
+      setActiveTab(targetTool);
+      showNotice(`Imported ${parsed.length} title(s) from "${file.name}" into ${toolDisplayName(targetTool)}.`);
+
+      if (targetTool === 'newsletter') {
+        const bulletinMeta = extractBulletinMetadata(text);
+        if (bulletinMeta) {
+          if (bulletinMeta.scheduleDate) {
+            state.newsletter.scheduleDate = bulletinMeta.scheduleDate;
+            const schedEl = document.getElementById('nlScheduleDate');
+            if (schedEl) schedEl.value = bulletinMeta.scheduleDate;
+            state.newsletter.title = `Theatrical Release Bulletin: ${bulletinMeta.scheduleDate}`;
+            const titleEl = document.getElementById('nlTitle');
+            if (titleEl) titleEl.value = state.newsletter.title;
+          }
+          if (bulletinMeta.helpDeskPhone) {
+            state.newsletter.helpDeskPhone = bulletinMeta.helpDeskPhone;
+            const phoneEl = document.getElementById('nlHelpDeskPhone');
+            if (phoneEl) phoneEl.value = bulletinMeta.helpDeskPhone;
+          }
+          if (bulletinMeta.helpDeskEmail) {
+            state.newsletter.helpDeskEmail = bulletinMeta.helpDeskEmail;
+            const emailEl = document.getElementById('nlHelpDeskEmail');
+            if (emailEl) emailEl.value = bulletinMeta.helpDeskEmail;
+          }
+        }
+
+        renderNewsletterMovieList();
+        renderNewsletterPreview();
+
+        // Run auto-fetch with progress indicator
+        const targetMovies = Array.isArray(state.newsletter?.movies) ? state.newsletter.movies : [];
+        if (targetMovies.length > 0) {
+          (async () => {
+            for (let i = 0; i < targetMovies.length; i++) {
+              const m = targetMovies[i];
+              showNotice(`Auto-fetching poster & trailer (${i + 1}/${targetMovies.length}): ${m.title}...`);
+              try {
+                const res = await fetch(`/api/fetch-movie-assets?title=${encodeURIComponent(m.title)}&year=${encodeURIComponent(m.year || '')}&language=${encodeURIComponent(m.language || '')}`);
+                if (res.ok) {
+                  const assetData = await res.json();
+                  if (assetData.poster_remote) {
+                    m.poster_remote = assetData.poster_remote;
+                    m.poster_url = assetData.poster_remote;
+                    m.selectedPoster = assetData.poster_remote;
+                  }
+                  if (assetData.tmdb_id) m.tmdb_id = assetData.tmdb_id;
+                  if (assetData.trailer_url) {
+                    m.trailer_url = assetData.trailer_url;
+                    m.selectedTrailer = assetData.trailer_url;
+                  }
+                }
+              } catch {
+                // Fallback to fetchMovieMetadata
+                if (state.status.tmdb) {
+                  await fetchMovieMetadata(m);
+                }
+              }
+              renderNewsletterPreview();
+              renderNewsletterMovieList();
+            }
+            showNotice(`Auto-fetch complete for ${targetMovies.length} newsletter movie(s).`);
+          })();
+        }
+      }
     } else {
-      showNotice('No valid titles found in imported file.', 'error');
+      if (isPdf) {
+        showNotice('No movie data found in the PDF.', 'error');
+      } else {
+        showNotice('No valid titles found in imported file.', 'error');
+      }
     }
   } catch (err) {
     showNotice(`Import Error: ${err.message}`, 'error');
+  } finally {
+    e.target.value = '';
   }
 }
 
 // Newsletter Sync Setup
 function setupNewsletterSync() {
+  const titleInit = document.getElementById('nlTitle');
+  if (titleInit && state.newsletter.title) {
+    titleInit.value = state.newsletter.title;
+  }
+  const schedInit = document.getElementById('nlScheduleDate');
+  if (schedInit && state.newsletter.scheduleDate) {
+    schedInit.value = state.newsletter.scheduleDate;
+  }
+  const phoneInit = document.getElementById('nlHelpDeskPhone');
+  if (phoneInit && state.newsletter.helpDeskPhone) {
+    phoneInit.value = state.newsletter.helpDeskPhone;
+  }
+  const emailInit = document.getElementById('nlHelpDeskEmail');
+  if (emailInit && state.newsletter.helpDeskEmail) {
+    emailInit.value = state.newsletter.helpDeskEmail;
+  }
   const layoutSelectInit = document.getElementById('nlLayoutTemplate');
   if (layoutSelectInit && state.newsletter.layoutTemplate) {
     layoutSelectInit.value = state.newsletter.layoutTemplate;
   }
+  const fontSelectInit = document.getElementById('nlFontFamily');
+  if (fontSelectInit && state.newsletter.fontFamily) {
+    fontSelectInit.value = state.newsletter.fontFamily;
+  }
+  const accentColorInit = document.getElementById('nlAccentColor');
+  const accentHexInit = document.getElementById('nlAccentColorHex');
+  if (accentColorInit && state.newsletter.accentColor) {
+    accentColorInit.value = state.newsletter.accentColor;
+  }
+  if (accentHexInit && state.newsletter.accentColor) {
+    accentHexInit.value = state.newsletter.accentColor;
+  }
+  const introInit = document.getElementById('nlIntro');
+  if (introInit && state.newsletter.intro) {
+    introInit.value = state.newsletter.intro;
+  }
+  const topBUrlInit = document.getElementById('nlTopBannerUrl');
+  if (topBUrlInit && state.newsletter.topBannerUrl) {
+    topBUrlInit.value = state.newsletter.topBannerUrl;
+  }
+  const topBLinkInit = document.getElementById('nlTopBannerLink');
+  if (topBLinkInit && state.newsletter.topBannerLink) {
+    topBLinkInit.value = state.newsletter.topBannerLink;
+  }
+  const secBUrlInit = document.getElementById('nlSecondBannerUrl');
+  if (secBUrlInit && state.newsletter.secondBannerUrl) {
+    secBUrlInit.value = state.newsletter.secondBannerUrl;
+  }
+  const secBLinkInit = document.getElementById('nlSecondBannerLink');
+  if (secBLinkInit && state.newsletter.secondBannerLink) {
+    secBLinkInit.value = state.newsletter.secondBannerLink;
+  }
+  const footerInit = document.getElementById('nlFooterText');
+  if (footerInit && state.newsletter.footer) {
+    footerInit.value = state.newsletter.footer;
+  }
 
-  const fields = ['nlTitle', 'nlLayoutTemplate', 'nlIntro', 'nlTopBannerUrl', 'nlTopBannerLink', 'nlSecondBannerUrl', 'nlSecondBannerLink', 'nlFooterText'];
+  const fields = [
+    'nlTitle', 'nlScheduleDate', 'nlLayoutTemplate', 'nlFontFamily',
+    'nlHelpDeskPhone', 'nlHelpDeskEmail', 'nlIntro',
+    'nlTopBannerUrl', 'nlTopBannerLink', 'nlSecondBannerUrl', 'nlSecondBannerLink', 'nlFooterText'
+  ];
 
   fields.forEach(id => {
     const input = document.getElementById(id);
     if (input) {
       const eventName = input.tagName === 'SELECT' ? 'change' : 'input';
       input.addEventListener(eventName, () => {
-        state.newsletter.title = document.getElementById('nlTitle').value;
+        state.newsletter.title = document.getElementById('nlTitle')?.value || '';
+        state.newsletter.scheduleDate = document.getElementById('nlScheduleDate')?.value || '';
+        state.newsletter.helpDeskPhone = document.getElementById('nlHelpDeskPhone')?.value || '';
+        state.newsletter.helpDeskEmail = document.getElementById('nlHelpDeskEmail')?.value || '';
         const layoutSelect = document.getElementById('nlLayoutTemplate');
         if (layoutSelect) state.newsletter.layoutTemplate = layoutSelect.value;
-        state.newsletter.intro = document.getElementById('nlIntro').value;
-        state.newsletter.topBannerUrl = document.getElementById('nlTopBannerUrl').value;
-        state.newsletter.topBannerLink = document.getElementById('nlTopBannerLink').value;
-        state.newsletter.secondBannerUrl = document.getElementById('nlSecondBannerUrl').value;
-        state.newsletter.secondBannerLink = document.getElementById('nlSecondBannerLink').value;
-        state.newsletter.footer = document.getElementById('nlFooterText').value;
+        const fontSelect = document.getElementById('nlFontFamily');
+        if (fontSelect) state.newsletter.fontFamily = fontSelect.value;
+        state.newsletter.intro = document.getElementById('nlIntro')?.value || '';
+        state.newsletter.topBannerUrl = document.getElementById('nlTopBannerUrl')?.value || '';
+        state.newsletter.topBannerLink = document.getElementById('nlTopBannerLink')?.value || '';
+        state.newsletter.secondBannerUrl = document.getElementById('nlSecondBannerUrl')?.value || '';
+        state.newsletter.secondBannerLink = document.getElementById('nlSecondBannerLink')?.value || '';
+        state.newsletter.footer = document.getElementById('nlFooterText')?.value || '';
 
         renderNewsletterPreview();
         saveLocalState();
       });
     }
   });
+
+  if (accentColorInit && accentHexInit) {
+    accentColorInit.addEventListener('input', () => {
+      accentHexInit.value = accentColorInit.value;
+      state.newsletter.accentColor = accentColorInit.value;
+      renderNewsletterPreview();
+      saveLocalState();
+    });
+    accentHexInit.addEventListener('input', () => {
+      const val = accentHexInit.value.trim();
+      if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
+        accentColorInit.value = val;
+      }
+      state.newsletter.accentColor = val;
+      renderNewsletterPreview();
+      saveLocalState();
+    });
+  }
+
+  // Header Rich Text Editor & Toolbar setup
+  const headerEditor = document.getElementById('nlHeaderEditor');
+  if (headerEditor) {
+    if (state.newsletter.header_html) {
+      headerEditor.innerHTML = state.newsletter.header_html;
+    }
+    headerEditor.addEventListener('input', () => {
+      state.newsletter.header_html = headerEditor.innerHTML;
+      renderNewsletterPreview();
+      saveLocalState();
+    });
+  }
+
+  const bindRtf = (id, command, val = null) => {
+    const btn = document.getElementById(id);
+    if (btn && headerEditor) {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        headerEditor.focus();
+        if (command === 'createLink') {
+          const url = prompt('Enter link URL (e.g. https://... or mailto:...):');
+          if (url) document.execCommand('createLink', false, url);
+        } else if (command === 'reset') {
+          headerEditor.innerHTML = `<p style="margin:0 0 6px 0;">Keep tabs on the feature releases coming your way and plan your screening schedules seamlessly with our weekly feature report.</p><p style="margin:0 0 6px 0;">Need further information? Call the Qube Wire support team at: (424) 343-2691 or</p><p style="margin:0;">write to: support@qubewire.com</p>`;
+        } else {
+          document.execCommand(command, false, val);
+        }
+        state.newsletter.header_html = headerEditor.innerHTML;
+        renderNewsletterPreview();
+        saveLocalState();
+      });
+    }
+  };
+
+  bindRtf('btnRtfBold', 'bold');
+  bindRtf('btnRtfItalic', 'italic');
+  bindRtf('btnRtfH1', 'formatBlock', '<h1>');
+  bindRtf('btnRtfH2', 'formatBlock', '<h2>');
+  bindRtf('btnRtfLink', 'createLink');
+  bindRtf('btnRtfReset', 'reset');
 
   // Top Banner Upload
   setupImageUpload('btnUploadTopBanner', 'fileTopBannerInput', (url) => {
@@ -1361,133 +1805,444 @@ function setupNewsletterSync() {
     renderNewsletterPreview();
   });
 
-  // Newsletter Action Buttons (Fetch, Apply Changes, Update Preview)
-  const btnFetchPoster = document.getElementById('btnNlFetchPoster');
-  if (btnFetchPoster) {
-    btnFetchPoster.addEventListener('click', async () => {
-      const activeMovie = state.movies.find(item => item.uid === state.selectedUid);
-      if (!activeMovie) {
-        showNotice('Please select a movie from the list first.', 'error');
-        return;
-      }
-      showNotice(`Fetching poster artwork for "${activeMovie.title}"...`);
-      if (!activeMovie.images || !activeMovie.images.poster || activeMovie.images.poster.length === 0) {
-        await fetchMovieMetadata(activeMovie);
-      }
-      const poster = activeMovie.selectedPoster || activeMovie.posterUrl || activeMovie.images?.poster?.[0]?.url;
-      if (poster) {
-        document.getElementById('nlDetailPosterUrl').value = poster;
-        activeMovie.selectedPoster = poster;
-        activeMovie.posterUrl = poster;
-        showNotice(`Poster fetched for "${activeMovie.title}". Click Apply Changes to confirm.`);
-        renderNewsletterPreview();
-      } else {
-        showNotice(`No poster found on TMDb for "${activeMovie.title}". You can paste a custom URL.`, 'error');
+  // Newsletter Reorder & Remove buttons
+  const btnNlUp = document.getElementById('btnNlMoveUp');
+  if (btnNlUp) {
+    btnNlUp.addEventListener('click', () => {
+      if (state.newsletter.selectedUid) {
+        moveMovieOrder(state.newsletter.selectedUid, -1, 'newsletter');
       }
     });
   }
 
+  const btnNlDown = document.getElementById('btnNlMoveDown');
+  if (btnNlDown) {
+    btnNlDown.addEventListener('click', () => {
+      if (state.newsletter.selectedUid) {
+        moveMovieOrder(state.newsletter.selectedUid, 1, 'newsletter');
+      }
+    });
+  }
+
+  const btnNlRemove = document.getElementById('btnNlRemoveMovie');
+  if (btnNlRemove) {
+    btnNlRemove.addEventListener('click', () => {
+      const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
+      if (activeMovie) {
+        promptRemoveMovie(activeMovie, 'newsletter');
+      } else {
+        showNotice('No movie selected to remove in Newsletter.', 'error');
+      }
+    });
+  }
+
+  // Live input sync for all Movie Details fields
+  const syncActiveMovieFromInputs = () => {
+    const newsletterData = state.newsletter;
+    if (!newsletterData || !Array.isArray(newsletterData.movies)) return;
+    const activeMovie = newsletterData.movies.find(item => item && item.uid === newsletterData.selectedUid);
+    if (!activeMovie) return;
+    const titleVal = document.getElementById('nlDetailTitle')?.value.trim();
+    if (titleVal) activeMovie.title = titleVal;
+    activeMovie.year = document.getElementById('nlDetailYear')?.value.trim() || '';
+    activeMovie.language = document.getElementById('nlDetailLanguage')?.value.trim() || '';
+    activeMovie.distributor = document.getElementById('nlDetailDistributor')?.value.trim() || '';
+    activeMovie.feature_duration = document.getElementById('nlDetailFeatureDuration')?.value.trim() || '';
+    activeMovie.featureDuration = activeMovie.feature_duration;
+    activeMovie.cpl_part1_duration = document.getElementById('nlDetailPart1Duration')?.value.trim() || '';
+    activeMovie.cplPart1Duration = activeMovie.cpl_part1_duration;
+    activeMovie.cpl_part2_duration = document.getElementById('nlDetailPart2Duration')?.value.trim() || '';
+    activeMovie.cplPart2Duration = activeMovie.cpl_part2_duration;
+    activeMovie.first_frame_end_credits = document.getElementById('nlDetailEndCredits')?.value.trim() || '';
+    activeMovie.firstFrameEndCredits = activeMovie.first_frame_end_credits;
+    activeMovie.first_frame_moving_credits = document.getElementById('nlDetailMovingCredits')?.value.trim() || '';
+    activeMovie.firstFrameMovingCredits = activeMovie.first_frame_moving_credits;
+    activeMovie.cplEntries = document.getElementById('nlDetailCplEntries')?.value.trim() || '';
+
+    const pMode = document.getElementById('nlDetailPosterMode')?.value || 'auto';
+    activeMovie.poster_mode = pMode;
+    activeMovie.posterMode = pMode;
+
+    const posterVal = document.getElementById('nlDetailPosterUrl')?.value.trim() || '';
+    activeMovie.poster_url = posterVal;
+    activeMovie.posterUrl = posterVal;
+    activeMovie.selectedPoster = posterVal;
+    activeMovie.poster_remote = posterVal;
+
+    const tMode = document.getElementById('nlDetailTrailerMode')?.value || 'auto';
+    activeMovie.trailer_mode = tMode;
+    activeMovie.trailerMode = tMode;
+
+    let trailerVal = document.getElementById('nlDetailTrailerUrl')?.value.trim() || '';
+    if (trailerVal && !trailerVal.startsWith('http') && !trailerVal.startsWith('mailto:') && trailerVal.includes('@')) {
+      trailerVal = `mailto:${trailerVal}`;
+    }
+    activeMovie.trailer_url = trailerVal;
+    activeMovie.trailerUrl = trailerVal;
+    activeMovie.selectedTrailer = trailerVal;
+
+    const incCheck = document.getElementById('nlDetailInclude');
+    if (incCheck) {
+      activeMovie.include = incCheck.checked;
+      activeMovie.checked = incCheck.checked;
+    }
+
+    renderNewsletterPreview();
+    saveLocalState();
+  };
+
+  [
+    'nlDetailTitle', 'nlDetailYear', 'nlDetailLanguage', 'nlDetailDistributor',
+    'nlDetailFeatureDuration', 'nlDetailPart1Duration', 'nlDetailPart2Duration',
+    'nlDetailEndCredits', 'nlDetailMovingCredits', 'nlDetailCplEntries',
+    'nlDetailPosterUrl', 'nlDetailTrailerUrl'
+  ].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', syncActiveMovieFromInputs);
+      el.addEventListener('change', syncActiveMovieFromInputs);
+    }
+  });
+
+  // Mode Dropdown changes: auto vs manual
+  const posterModeSelect = document.getElementById('nlDetailPosterMode');
+  const btnFetchPoster = document.getElementById('btnNlFetchPoster');
+  const posterInput = document.getElementById('nlDetailPosterUrl');
+  if (posterModeSelect) {
+    posterModeSelect.addEventListener('change', () => {
+      const isManual = posterModeSelect.value === 'manual';
+      if (btnFetchPoster) btnFetchPoster.disabled = isManual;
+      if (isManual && posterInput) posterInput.focus();
+      const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
+      if (activeMovie) {
+        activeMovie.poster_mode = posterModeSelect.value;
+        activeMovie.posterMode = posterModeSelect.value;
+      }
+      syncActiveMovieFromInputs();
+    });
+  }
+
+  const trailerModeSelect = document.getElementById('nlDetailTrailerMode');
   const btnFetchTrailer = document.getElementById('btnNlFetchTrailer');
-  if (btnFetchTrailer) {
-    btnFetchTrailer.addEventListener('click', async () => {
-      const activeMovie = state.movies.find(item => item.uid === state.selectedUid);
+  const trailerInput = document.getElementById('nlDetailTrailerUrl');
+  if (trailerModeSelect) {
+    trailerModeSelect.addEventListener('change', () => {
+      const isManual = trailerModeSelect.value === 'manual';
+      if (btnFetchTrailer) btnFetchTrailer.disabled = isManual;
+      if (isManual && trailerInput) trailerInput.focus();
+      const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
+      if (activeMovie) {
+        activeMovie.trailer_mode = trailerModeSelect.value;
+        activeMovie.trailerMode = trailerModeSelect.value;
+      }
+      syncActiveMovieFromInputs();
+    });
+  }
+
+  // Poster Image Upload
+  setupImageUpload('btnNlUploadPoster', 'fileNlPosterInput', (dataUrl) => {
+    const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
+    if (!activeMovie) {
+      showNotice('Please select a movie first to upload poster.', 'error');
+      return;
+    }
+    activeMovie.poster_url = dataUrl;
+    activeMovie.posterUrl = dataUrl;
+    activeMovie.selectedPoster = dataUrl;
+    activeMovie.poster_mode = 'manual';
+    activeMovie.posterMode = 'manual';
+    if (posterInput) posterInput.value = dataUrl;
+    if (posterModeSelect) posterModeSelect.value = 'manual';
+    if (btnFetchPoster) btnFetchPoster.disabled = true;
+    renderNewsletterPreview();
+    saveLocalState();
+    showNotice(`Poster image set for "${activeMovie.title}".`);
+  });
+
+  // Include in Newsletter Checkbox
+  const includeCheck = document.getElementById('nlDetailInclude');
+  if (includeCheck) {
+    includeCheck.addEventListener('change', () => {
+      const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
+      if (activeMovie) {
+        activeMovie.include = includeCheck.checked;
+        activeMovie.checked = includeCheck.checked;
+        renderNewsletterMovieList();
+        renderNewsletterPreview();
+        saveLocalState();
+      }
+    });
+  }
+
+  // Newsletter Action Buttons (Fetch, Apply Changes, Update Preview)
+  if (btnFetchPoster) {
+    btnFetchPoster.addEventListener('click', async () => {
+      const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
       if (!activeMovie) {
-        showNotice('Please select a movie from the list first.', 'error');
+        showNotice('Please select a movie from the newsletter list first.', 'error');
         return;
       }
-      showNotice(`Fetching trailer for "${activeMovie.title}"...`);
-      if (!activeMovie.videos || activeMovie.videos.length === 0) {
-        await fetchMovieMetadata(activeMovie);
+      if (activeMovie.poster_mode === 'manual') {
+        showNotice('Poster mode is Manual. Switch to Auto to fetch from TMDB.', 'error');
+        return;
       }
-      if (!activeMovie.videos || activeMovie.videos.length === 0) {
-        try {
-          const res = await fetch(`/api/youtube?q=${encodeURIComponent(activeMovie.title + ' ' + (activeMovie.year || '') + ' official trailer')}`);
+      showNotice(`Searching TMDB poster for "${activeMovie.title}"...`);
+      try {
+        const res = await fetch(`/api/fetch-movie-assets?title=${encodeURIComponent(activeMovie.title)}&year=${encodeURIComponent(activeMovie.year || '')}&language=${encodeURIComponent(activeMovie.language || '')}`);
+        if (res.ok) {
           const data = await res.json();
-          if (data.videos && data.videos.length > 0) {
-            activeMovie.videos = data.videos;
+          if (data.poster_remote) {
+            activeMovie.poster_remote = data.poster_remote;
+            activeMovie.poster_url = data.poster_remote;
+            activeMovie.posterUrl = data.poster_remote;
+            activeMovie.selectedPoster = data.poster_remote;
+            if (data.tmdb_id) activeMovie.tmdb_id = data.tmdb_id;
+            if (posterInput) posterInput.value = data.poster_remote;
+            showNotice(`Poster found for "${activeMovie.title}".`);
+            renderNewsletterPreview();
+            saveLocalState();
+            return;
           }
-        } catch {
-          // ignore
+        }
+      } catch {}
+
+      // Cross-tab fallback
+      const crossMatch = [...(state.artwork?.movies || []), ...(state.trailers?.movies || []), ...(state.newsletter?.movies || [])]
+        .find(m => m && m.title && m.title.toLowerCase().trim() === activeMovie.title.toLowerCase().trim());
+      const crossPoster = crossMatch?.selectedPoster || crossMatch?.posterUrl || crossMatch?.poster_url || crossMatch?.images?.poster?.[0]?.url;
+      if (crossPoster) {
+        activeMovie.poster_remote = crossPoster;
+        activeMovie.poster_url = crossPoster;
+        activeMovie.posterUrl = crossPoster;
+        activeMovie.selectedPoster = crossPoster;
+        if (posterInput) posterInput.value = crossPoster;
+        showNotice(`Poster found for "${activeMovie.title}".`);
+        renderNewsletterPreview();
+        saveLocalState();
+        return;
+      }
+
+      // Fallback
+      if (state.status.tmdb) {
+        await fetchMovieMetadata(activeMovie);
+        const poster = activeMovie.selectedPoster || activeMovie.posterUrl || activeMovie.images?.poster?.[0]?.url;
+        if (poster) {
+          activeMovie.poster_remote = poster;
+          activeMovie.poster_url = poster;
+          activeMovie.posterUrl = poster;
+          activeMovie.selectedPoster = poster;
+          if (posterInput) posterInput.value = poster;
+          showNotice(`Poster found for "${activeMovie.title}".`);
+          renderNewsletterPreview();
+          saveLocalState();
+          return;
         }
       }
-      const trailer = activeMovie.selectedTrailer || activeMovie.trailerUrl || activeMovie.videos?.[0]?.url;
-      if (trailer) {
-        document.getElementById('nlDetailTrailerUrl').value = trailer;
-        activeMovie.selectedTrailer = trailer;
-        activeMovie.trailerUrl = trailer;
-        showNotice(`Trailer fetched for "${activeMovie.title}". Click Apply Changes to confirm.`);
-        renderNewsletterPreview();
-      } else {
-        showNotice(`No trailer found for "${activeMovie.title}". You can paste a YouTube link manually.`, 'error');
+      showNotice(`No poster found for '${activeMovie.title}'. Paste a URL or click Upload.`, 'error');
+    });
+  }
+
+  if (btnFetchTrailer) {
+    btnFetchTrailer.addEventListener('click', async () => {
+      const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
+      if (!activeMovie) {
+        showNotice('Please select a movie from the newsletter list first.', 'error');
+        return;
       }
+      if (activeMovie.trailer_mode === 'manual') {
+        showNotice('Trailer mode is Manual. Switch to Auto to fetch trailer.', 'error');
+        return;
+      }
+      showNotice(`Searching trailer for "${activeMovie.title}"...`);
+      try {
+        const res = await fetch(`/api/fetch-movie-assets?title=${encodeURIComponent(activeMovie.title)}&year=${encodeURIComponent(activeMovie.year || '')}&language=${encodeURIComponent(activeMovie.language || '')}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.trailer_url) {
+            activeMovie.trailer_url = data.trailer_url;
+            activeMovie.trailerUrl = data.trailer_url;
+            activeMovie.selectedTrailer = data.trailer_url;
+            if (trailerInput) trailerInput.value = data.trailer_url;
+            showNotice(`Trailer found for "${activeMovie.title}".`);
+            renderNewsletterPreview();
+            saveLocalState();
+            return;
+          }
+        }
+      } catch {}
+
+      // Cross-tab fallback
+      const crossMatch = [...(state.trailers?.movies || []), ...(state.artwork?.movies || []), ...(state.newsletter?.movies || [])]
+        .find(m => m && m.title && m.title.toLowerCase().trim() === activeMovie.title.toLowerCase().trim());
+      const crossTrailer = crossMatch?.selectedTrailer || crossMatch?.trailerUrl || crossMatch?.trailer_url || (crossMatch?.videos && crossMatch.videos[0]?.url);
+      if (crossTrailer) {
+        activeMovie.trailer_url = crossTrailer;
+        activeMovie.trailerUrl = crossTrailer;
+        activeMovie.selectedTrailer = crossTrailer;
+        if (trailerInput) trailerInput.value = crossTrailer;
+        showNotice(`Trailer found for "${activeMovie.title}".`);
+        renderNewsletterPreview();
+        saveLocalState();
+        return;
+      }
+
+      // Fallback to YouTube official trailer search URL
+      const ytSearch = `https://www.youtube.com/results?search_query=${encodeURIComponent((activeMovie.title + ' ' + (activeMovie.year || '') + ' official trailer').trim())}`;
+      activeMovie.trailer_url = ytSearch;
+      activeMovie.trailerUrl = ytSearch;
+      activeMovie.selectedTrailer = ytSearch;
+      if (trailerInput) trailerInput.value = ytSearch;
+      showNotice(`YouTube trailer link created for "${activeMovie.title}".`);
+      renderNewsletterPreview();
+      saveLocalState();
     });
   }
 
   const btnApplyChanges = document.getElementById('btnNlApplyChanges');
   if (btnApplyChanges) {
     btnApplyChanges.addEventListener('click', () => {
-      const activeMovie = state.movies.find(item => item.uid === state.selectedUid);
-      if (!activeMovie) {
-        showNotice('Please select a movie first.', 'error');
+      const newsletterData = state.newsletter;
+      if (!newsletterData || !Array.isArray(newsletterData?.movies)) {
+        showNotice('No newsletter movie list available.', 'error');
         return;
       }
-      activeMovie.title = document.getElementById('nlDetailTitle').value.trim() || activeMovie.title;
-      activeMovie.year = document.getElementById('nlDetailYear').value.trim();
-      activeMovie.language = document.getElementById('nlDetailLanguage').value.trim();
-      activeMovie.distributor = document.getElementById('nlDetailDistributor').value.trim();
 
-      const posterVal = document.getElementById('nlDetailPosterUrl').value.trim();
-      activeMovie.selectedPoster = posterVal;
-      activeMovie.posterUrl = posterVal;
-      const posterModeEl = document.getElementById('nlDetailPosterMode');
-      if (posterModeEl) activeMovie.posterMode = posterModeEl.value;
+      // Sync active movie details from detail panel input controls
+      syncActiveMovieFromInputs();
 
-      const trailerVal = document.getElementById('nlDetailTrailerUrl').value.trim();
-      activeMovie.selectedTrailer = trailerVal;
-      activeMovie.trailerUrl = trailerVal;
-      const trailerModeEl = document.getElementById('nlDetailTrailerMode');
-      if (trailerModeEl) activeMovie.trailerMode = trailerModeEl.value;
+      // Iterate through the current movies array to commit and synchronize properties
+      newsletterData.movies.forEach(m => {
+        if (!m) return;
+        if (m.poster_url) {
+          m.posterUrl = m.poster_url;
+          m.selectedPoster = m.poster_url;
+        } else if (m.selectedPoster) {
+          m.poster_url = m.selectedPoster;
+          m.posterUrl = m.selectedPoster;
+        } else if (m.posterUrl) {
+          m.poster_url = m.posterUrl;
+          m.selectedPoster = m.posterUrl;
+        }
+
+        if (m.trailer_url) {
+          m.trailerUrl = m.trailer_url;
+          m.selectedTrailer = m.trailer_url;
+        } else if (m.selectedTrailer) {
+          m.trailer_url = m.selectedTrailer;
+          m.trailerUrl = m.selectedTrailer;
+        } else if (m.trailerUrl) {
+          m.trailer_url = m.trailerUrl;
+          m.selectedTrailer = m.trailerUrl;
+        }
+      });
 
       renderNewsletterMovieList();
       updateAllUI();
-      renderNewsletterPreview();
-      showNotice(`Changes applied for "${activeMovie.title}". Preview updated.`);
+
+      // Explicitly force re-render of the live preview iframe
+      const freshMovies = (state.newsletter && Array.isArray(state.newsletter?.movies)) ? state.newsletter.movies : [];
+      const freshHtml = generateNewsletterHTML(freshMovies, state.newsletter || {});
+      const iframe = document.getElementById('nlIframePreview');
+      if (iframe) {
+        iframe.srcdoc = freshHtml;
+        try {
+          const doc = iframe.contentDocument || iframe.contentWindow?.document;
+          if (doc) {
+            doc.open();
+            doc.write(freshHtml);
+            doc.close();
+          }
+        } catch (e) {
+          console.warn('Iframe doc write refresh notice:', e);
+        }
+      }
+
+      const activeMovie = newsletterData.movies.find(item => item && item.uid === newsletterData.selectedUid);
+      showNotice(`Changes applied${activeMovie ? ` for "${activeMovie.title}"` : ''}. Newsletter preview updated.`);
     });
   }
 
   const btnUpdatePreview = document.getElementById('btnNlUpdatePreview');
   if (btnUpdatePreview) {
     btnUpdatePreview.addEventListener('click', () => {
-      const activeMovie = state.movies.find(item => item.uid === state.selectedUid);
-      if (activeMovie) {
-        activeMovie.title = document.getElementById('nlDetailTitle').value.trim() || activeMovie.title;
-        activeMovie.year = document.getElementById('nlDetailYear').value.trim();
-        activeMovie.language = document.getElementById('nlDetailLanguage').value.trim();
-        activeMovie.distributor = document.getElementById('nlDetailDistributor').value.trim();
-        const pVal = document.getElementById('nlDetailPosterUrl').value.trim();
-        if (pVal) {
-          activeMovie.selectedPoster = pVal;
-          activeMovie.posterUrl = pVal;
-        }
-        const tVal = document.getElementById('nlDetailTrailerUrl').value.trim();
-        if (tVal) {
-          activeMovie.selectedTrailer = tVal;
-          activeMovie.trailerUrl = tVal;
-        }
-      }
+      syncActiveMovieFromInputs();
       renderNewsletterPreview();
       showNotice('Newsletter live preview refreshed.');
     });
   }
 
-  // Export Buttons
-  document.getElementById('btnExportHTML').addEventListener('click', () => exportNewsletterHTML(false));
-  document.getElementById('btnExportEmbeddedHTML').addEventListener('click', () => exportNewsletterHTML(true));
+  // Sharing & Export Buttons
+  const btnCopy = document.getElementById('btnCopyHTML');
+  if (btnCopy) btnCopy.addEventListener('click', copyNewsletterHTML);
+  const btnCopyQuick = document.getElementById('btnCopyHTMLQuick');
+  if (btnCopyQuick) btnCopyQuick.addEventListener('click', copyNewsletterHTML);
+  const btnCopyRich = document.getElementById('btnCopyRichEmail');
+  if (btnCopyRich) btnCopyRich.addEventListener('click', copyRichEmailHTML);
+
+  const btnExport = document.getElementById('btnExportHTML');
+  if (btnExport) btnExport.addEventListener('click', () => exportNewsletterHTML(false));
+  const btnExportEmb = document.getElementById('btnExportEmbeddedHTML');
+  if (btnExportEmb) btnExportEmb.addEventListener('click', () => exportNewsletterHTML(true));
 
   // Print PDF Button
   const btnPrint = document.getElementById('btnPrintNewsletter');
   if (btnPrint) {
     btnPrint.addEventListener('click', printNewsletterPDF);
+  }
+}
+
+// Copy raw shareable HTML to clipboard
+async function copyNewsletterHTML() {
+  const newsletterData = state.newsletter;
+  if (!newsletterData || !Array.isArray(newsletterData.movies) || newsletterData.movies.length === 0) {
+    showNotice('No movies in Newsletter to copy.', 'error');
+    return;
+  }
+  const html = generateNewsletterHTML(newsletterData.movies, newsletterData);
+  try {
+    await navigator.clipboard.writeText(html);
+    showNotice('Shareable HTML copied to clipboard! You can paste it into any web page or email platform.');
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = html;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    showNotice('Shareable HTML copied to clipboard!');
+  }
+}
+
+// Copy rich formatted email to clipboard (paste straight into Gmail / Outlook / Apple Mail)
+async function copyRichEmailHTML() {
+  const newsletterData = state.newsletter;
+  if (!newsletterData || !Array.isArray(newsletterData.movies) || newsletterData.movies.length === 0) {
+    showNotice('No movies in Newsletter to copy.', 'error');
+    return;
+  }
+  const html = generateNewsletterHTML(newsletterData.movies, newsletterData);
+  try {
+    if (navigator.clipboard && window.ClipboardItem) {
+      const blobHtml = new Blob([html], { type: 'text/html' });
+      const blobText = new Blob([html], { type: 'text/plain' });
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': blobHtml,
+          'text/plain': blobText
+        })
+      ]);
+      showNotice('Rich Email copied to clipboard! You can now paste directly into Gmail, Outlook, or Apple Mail compose window.');
+      return;
+    }
+  } catch (e) {
+    console.warn('Rich clipboard write fallback:', e);
+  }
+
+  try {
+    await navigator.clipboard.writeText(html);
+    showNotice('Newsletter HTML copied to clipboard!');
+  } catch {
+    showNotice('Could not copy to clipboard.', 'error');
   }
 }
 
@@ -1508,38 +2263,128 @@ function printNewsletterPDF() {
   }
 }
 
-// Render Newsletter Movie List (Section 2)
+// Render Newsletter Movie List strictly from newsletter.movies with Drag-and-Drop and Manual Sorting
+let nlDraggedIdx = null;
+
 function renderNewsletterMovieList() {
   const listBox = document.getElementById('nlMovieListBox');
   if (!listBox) return;
 
-  if (!state.movies || state.movies.length === 0) {
-    listBox.innerHTML = '<div style="padding: 14px; text-align: center; color: #9CA3AF; font-size: 13px;">No movies in library. Add titles to see them here.</div>';
+  const newsletterData = state.newsletter;
+  if (!newsletterData || !Array.isArray(newsletterData.movies) || newsletterData.movies.length === 0) {
+    listBox.innerHTML = '<div style="padding: 14px; text-align: center; color: #9CA3AF; font-size: 13px;">No movies in Newsletter. Add or upload titles above to see them here.</div>';
     clearNewsletterMovieDetails();
     return;
   }
 
-  let activeMovie = state.movies.find(m => m.uid === state.selectedUid);
-  if (!activeMovie && state.movies.length > 0) {
-    state.selectedUid = state.movies[0].uid;
-    activeMovie = state.movies[0];
+  let activeMovie = newsletterData.movies.find(m => m && m.uid === newsletterData.selectedUid);
+  if (!activeMovie && newsletterData.movies.length > 0) {
+    newsletterData.selectedUid = newsletterData.movies[0].uid;
+    activeMovie = newsletterData.movies[0];
   }
 
   listBox.innerHTML = '';
-  state.movies.forEach(m => {
+  newsletterData.movies.forEach((m, idx) => {
+    if (!m) return;
     const item = document.createElement('div');
-    const isSelected = m.uid === state.selectedUid;
+    const isSelected = m.uid === newsletterData.selectedUid;
     item.className = `nl-movie-item ${isSelected ? 'selected' : ''}`;
     item.dataset.uid = m.uid;
+    item.dataset.index = idx;
     item.setAttribute('role', 'option');
     item.setAttribute('aria-selected', isSelected ? 'true' : 'false');
-    item.textContent = `${m.title}${m.year ? ` (${m.year})` : ''}`;
+    item.draggable = true;
 
+    // Drag Handle Icon
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'nl-drag-handle';
+    dragHandle.innerHTML = '⋮⋮';
+    dragHandle.title = 'Drag to reorder movie';
+
+    // Title Label
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'nl-movie-title-text';
+    titleSpan.textContent = `${m.title}${m.year ? ` (${m.year})` : ''}`;
+
+    // Manual Reorder Buttons (Move Up / Move Down)
+    const reorderControls = document.createElement('div');
+    reorderControls.className = 'nl-reorder-controls';
+
+    const btnUp = document.createElement('button');
+    btnUp.type = 'button';
+    btnUp.className = 'nl-reorder-btn';
+    btnUp.innerHTML = '▲';
+    btnUp.title = 'Move up in list';
+    btnUp.onclick = (e) => {
+      e.stopPropagation();
+      if (idx > 0) {
+        const temp = newsletterData.movies[idx];
+        newsletterData.movies[idx] = newsletterData.movies[idx - 1];
+        newsletterData.movies[idx - 1] = temp;
+        saveLocalState();
+        renderNewsletterMovieList();
+        renderNewsletterPreview();
+      }
+    };
+
+    const btnDown = document.createElement('button');
+    btnDown.type = 'button';
+    btnDown.className = 'nl-reorder-btn';
+    btnDown.innerHTML = '▼';
+    btnDown.title = 'Move down in list';
+    btnDown.onclick = (e) => {
+      e.stopPropagation();
+      if (idx < newsletterData.movies.length - 1) {
+        const temp = newsletterData.movies[idx];
+        newsletterData.movies[idx] = newsletterData.movies[idx + 1];
+        newsletterData.movies[idx + 1] = temp;
+        saveLocalState();
+        renderNewsletterMovieList();
+        renderNewsletterPreview();
+      }
+    };
+
+    reorderControls.appendChild(btnUp);
+    reorderControls.appendChild(btnDown);
+
+    item.appendChild(dragHandle);
+    item.appendChild(titleSpan);
+    item.appendChild(reorderControls);
+
+    // Selection Event
     item.addEventListener('click', () => {
-      state.selectedUid = m.uid;
+      newsletterData.selectedUid = m.uid;
       renderNewsletterMovieList();
-      const current = state.movies.find(x => x.uid === m.uid);
+      const current = newsletterData.movies.find(x => x && x.uid === m.uid);
       populateNewsletterMovieDetails(current);
+    });
+
+    // Drag-and-Drop Handlers
+    item.addEventListener('dragstart', (e) => {
+      nlDraggedIdx = idx;
+      e.dataTransfer.effectAllowed = 'move';
+      item.classList.add('dragging');
+    });
+
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    });
+
+    item.addEventListener('drop', (e) => {
+      e.preventDefault();
+      if (nlDraggedIdx === null || nlDraggedIdx === idx) return;
+      const movedItem = newsletterData.movies.splice(nlDraggedIdx, 1)[0];
+      newsletterData.movies.splice(idx, 0, movedItem);
+      nlDraggedIdx = null;
+      saveLocalState();
+      renderNewsletterMovieList();
+      renderNewsletterPreview();
+    });
+
+    item.addEventListener('dragend', () => {
+      item.classList.remove('dragging');
+      nlDraggedIdx = null;
     });
 
     listBox.appendChild(item);
@@ -1559,24 +2404,58 @@ function populateNewsletterMovieDetails(m) {
   const yearEl = document.getElementById('nlDetailYear');
   const langEl = document.getElementById('nlDetailLanguage');
   const distEl = document.getElementById('nlDetailDistributor');
+  const durEl = document.getElementById('nlDetailFeatureDuration');
+  const p1El = document.getElementById('nlDetailPart1Duration');
+  const p2El = document.getElementById('nlDetailPart2Duration');
+  const ffecEl = document.getElementById('nlDetailEndCredits');
+  const ffmcEl = document.getElementById('nlDetailMovingCredits');
+  const cplEl = document.getElementById('nlDetailCplEntries');
+  const incEl = document.getElementById('nlDetailInclude');
   const posterEl = document.getElementById('nlDetailPosterUrl');
   const posterModeEl = document.getElementById('nlDetailPosterMode');
   const trailerEl = document.getElementById('nlDetailTrailerUrl');
   const trailerModeEl = document.getElementById('nlDetailTrailerMode');
+  const btnFetchPoster = document.getElementById('btnNlFetchPoster');
+  const btnFetchTrailer = document.getElementById('btnNlFetchTrailer');
 
   if (titleEl) titleEl.value = m.title || '';
   if (yearEl) yearEl.value = m.year || '';
   if (langEl) langEl.value = m.language || '';
   if (distEl) distEl.value = m.distributor || '';
-  if (posterEl) posterEl.value = m.selectedPoster || m.posterUrl || m.images?.poster?.[0]?.url || '';
-  if (posterModeEl) posterModeEl.value = m.posterMode || 'auto';
-  if (trailerEl) trailerEl.value = m.selectedTrailer || m.trailerUrl || (m.videos && m.videos[0]?.url) || '';
-  if (trailerModeEl) trailerModeEl.value = m.trailerMode || 'auto';
+  if (durEl) durEl.value = m.feature_duration || m.featureDuration || '';
+  if (p1El) p1El.value = m.cpl_part1_duration || m.cplPart1Duration || '';
+  if (p2El) p2El.value = m.cpl_part2_duration || m.cplPart2Duration || '';
+  if (ffecEl) ffecEl.value = m.first_frame_end_credits || m.firstFrameEndCredits || '';
+  if (ffmcEl) ffmcEl.value = m.first_frame_moving_credits || m.firstFrameMovingCredits || '';
+  if (cplEl) cplEl.value = m.cplEntries || (Array.isArray(m.cpls) ? m.cpls.map(c => typeof c === 'string' ? c : (c.name ? `${c.name}${c.part ? ' - ' + c.part : ''}` : '')).filter(Boolean).join('\n') : '');
+
+  if (incEl) {
+    incEl.checked = m.include !== false && m.checked !== false;
+  }
+
+  const posterMode = m.poster_mode || m.posterMode || 'auto';
+  if (posterModeEl) posterModeEl.value = posterMode;
+  if (btnFetchPoster) btnFetchPoster.disabled = (posterMode === 'manual');
+  if (posterEl) {
+    posterEl.value = m.poster_url || m.posterUrl || m.selectedPoster || m.poster_remote || m.images?.poster?.[0]?.url || '';
+  }
+
+  const trailerMode = m.trailer_mode || m.trailerMode || 'auto';
+  if (trailerModeEl) trailerModeEl.value = trailerMode;
+  if (btnFetchTrailer) btnFetchTrailer.disabled = (trailerMode === 'manual');
+  if (trailerEl) {
+    trailerEl.value = m.trailer_url || m.trailerUrl || m.selectedTrailer || (m.videos && m.videos[0]?.url) || '';
+  }
 }
 
 // Clear Movie Details Fields
 function clearNewsletterMovieDetails() {
-  const fields = ['nlDetailTitle', 'nlDetailYear', 'nlDetailLanguage', 'nlDetailDistributor', 'nlDetailPosterUrl', 'nlDetailTrailerUrl'];
+  const fields = [
+    'nlDetailTitle', 'nlDetailYear', 'nlDetailLanguage', 'nlDetailDistributor',
+    'nlDetailFeatureDuration', 'nlDetailPart1Duration', 'nlDetailPart2Duration',
+    'nlDetailEndCredits', 'nlDetailMovingCredits', 'nlDetailCplEntries',
+    'nlDetailPosterUrl', 'nlDetailTrailerUrl'
+  ];
   fields.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
@@ -1599,27 +2478,43 @@ function setupImageUpload(btnId, fileInputId, callback) {
   }
 }
 
-// Render Newsletter Live Preview
+// Render Newsletter Live Preview strictly from newsletter.movies
 function renderNewsletterPreview() {
   const iframe = document.getElementById('nlIframePreview');
   if (!iframe) return;
 
-  const html = generateNewsletterHTML(state.movies, state.newsletter);
-  const doc = iframe.contentDocument || iframe.contentWindow.document;
-  doc.open();
-  doc.write(html);
-  doc.close();
+  const newsletterData = state.newsletter;
+  const moviesArray = (newsletterData && Array.isArray(newsletterData.movies)) ? newsletterData.movies : [];
+
+  const html = generateNewsletterHTML(moviesArray, newsletterData || {});
+  iframe.srcdoc = html;
+  try {
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (doc) {
+      doc.open();
+      doc.write(html);
+      doc.close();
+    }
+  } catch {
+    // iframe.srcdoc reliably handles rendering
+  }
 }
 
-// Export Newsletter HTML File
+// Export Newsletter HTML File strictly from newsletter.movies
 async function exportNewsletterHTML(embedImages = false) {
-  let moviesToExport = state.movies;
+  const newsletterData = state.newsletter;
+  let moviesToExport = (newsletterData && Array.isArray(newsletterData.movies)) ? newsletterData.movies : [];
+
+  if (moviesToExport.length === 0) {
+    showNotice('No movies in Newsletter to export. Add titles to newsletter first.', 'error');
+    return;
+  }
 
   if (embedImages) {
     showNotice('Embedding TMDB images for offline export...');
-    moviesToExport = await Promise.all(state.movies.map(async (m) => {
+    moviesToExport = await Promise.all(moviesToExport.map(async (m) => {
       const copy = { ...m };
-      const poster = m.selectedPoster || m.images?.poster?.[0]?.url;
+      const poster = m.poster_url || m.poster_remote || m.posterUrl || m.selectedPoster || m.images?.poster?.[0]?.url;
       if (poster && poster.startsWith('https://image.tmdb.org')) {
         try {
           const res = await fetch('/api/embed', {
@@ -1628,7 +2523,12 @@ async function exportNewsletterHTML(embedImages = false) {
             body: JSON.stringify({ url: poster })
           });
           const data = await res.json();
-          if (data.url) copy.selectedPoster = data.url;
+          if (data.url) {
+            copy.selectedPoster = data.url;
+            copy.poster_url = data.url;
+            copy.poster_remote = data.url;
+            copy.posterUrl = data.url;
+          }
         } catch {
           // fallback to remote
         }
@@ -1648,10 +2548,10 @@ async function exportNewsletterHTML(embedImages = false) {
   showNotice('Newsletter HTML exported successfully.');
 }
 
-// Download Artwork ZIP
+// Download Artwork ZIP strictly from artwork.movies
 async function downloadArtworkZIP() {
   const assets = [];
-  state.movies.forEach(m => {
+  state.artwork.movies.forEach(m => {
     const poster = m.posterUrl || m.selectedPoster || m.images?.poster?.[0]?.url;
     if (poster) assets.push({ name: `${m.title}_poster`, url: poster });
     const backdrop = m.selectedBackdrop || m.images?.backdrop?.[0]?.url;
@@ -1659,7 +2559,7 @@ async function downloadArtworkZIP() {
   });
 
   if (assets.length === 0) {
-    showNotice('No artwork available for ZIP export.', 'error');
+    showNotice('No artwork available for ZIP export in Artwork Studio.', 'error');
     return;
   }
 
@@ -1690,17 +2590,20 @@ async function downloadArtworkZIP() {
   }
 }
 
-// Export CSV Report
-function exportCSVReport() {
-  if (state.movies.length === 0) {
-    showNotice('No movies to export.', 'error');
+// Export CSV Report strictly for targeted tool
+function exportCSVReport(tool = state.activeTab) {
+  const targetTool = (tool === 'trailers') ? 'trailers' : 'artwork';
+  const movies = state[targetTool]?.movies || [];
+
+  if (movies.length === 0) {
+    showNotice(`No movies to export in ${toolDisplayName(targetTool)}.`, 'error');
     return;
   }
 
   const headers = ['Title', 'Year', 'Language', 'Distributor', 'Poster URL', 'Trailer URL', 'Feature Duration', 'CPL Part 1 Duration', 'CPL Part 2 Duration', 'Synopsis'];
   const rows = [headers.join(',')];
 
-  state.movies.forEach(m => {
+  movies.forEach(m => {
     const poster = m.posterUrl || m.selectedPoster || m.images?.poster?.[0]?.url || '';
     const trailer = m.trailerUrl || m.selectedTrailer || m.videos?.[0]?.url || '';
     const row = [
@@ -1723,17 +2626,18 @@ function exportCSVReport() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'movie-report.csv';
+  a.download = `${targetTool}-report.csv`;
   a.click();
   URL.revokeObjectURL(url);
-  showNotice('Movie CSV report exported.');
+  showNotice(`${toolDisplayName(targetTool)} CSV report exported.`);
 }
 
-// Save Project JSON
+// Save Project JSON with isolated tool datasets
 function saveProjectJSON() {
   const project = {
-    version: '1.0',
-    movies: state.movies,
+    version: '2.0',
+    artwork: state.artwork,
+    trailers: state.trailers,
     newsletter: state.newsletter
   };
 
@@ -1747,7 +2651,7 @@ function saveProjectJSON() {
   showNotice('Project file saved.');
 }
 
-// Load Project JSON
+// Load Project JSON supporting both isolated format and legacy format
 function loadProjectJSON(e) {
   const file = e.target.files[0];
   if (!file) return;
@@ -1756,13 +2660,32 @@ function loadProjectJSON(e) {
   reader.onload = (event) => {
     try {
       const data = JSON.parse(event.target.result);
-      if (data && Array.isArray(data.movies)) {
-        if (state.movies.length > 0) {
-          if (!confirm('Replace your current movie workspace with this project file?')) return;
+      if (data) {
+        const total = (data.artwork?.movies?.length || 0) + (data.trailers?.movies?.length || 0) + (data.newsletter?.movies?.length || 0) + (data.movies?.length || 0);
+        const currentTotal = (state.artwork?.movies?.length || 0) + (state.trailers?.movies?.length || 0) + (state.newsletter?.movies?.length || 0);
+        if (total > 0 && currentTotal > 0) {
+          if (!confirm('Replace your current workspace with this project file?')) return;
         }
-        state.movies = data.movies;
-        if (data.newsletter) state.newsletter = { ...state.newsletter, ...data.newsletter };
-        state.selectedUid = state.movies[0]?.uid || null;
+
+        if (data.artwork && Array.isArray(data.artwork.movies)) {
+          state.artwork = data.artwork;
+        }
+        if (data.trailers && Array.isArray(data.trailers.movies)) {
+          state.trailers = data.trailers;
+        }
+        if (data.newsletter) {
+          state.newsletter = { ...state.newsletter, ...data.newsletter };
+        }
+        // Backward compatibility with v1 single-array projects
+        if (Array.isArray(data.movies)) {
+          state.artwork.movies = data.movies;
+          state.artwork.selectedUid = data.movies[0]?.uid || null;
+        }
+
+        if (!Array.isArray(state.artwork?.movies)) state.artwork = { movies: [], selectedUid: null };
+        if (!Array.isArray(state.trailers?.movies)) state.trailers = { movies: [], selectedUid: null };
+        if (!Array.isArray(state.newsletter?.movies)) state.newsletter.movies = [];
+
         updateAllUI();
         showNotice('Project loaded successfully.');
       } else {

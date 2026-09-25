@@ -18,7 +18,24 @@ async function api(url){
 function tmdb(path,params={}){if(!process.env.TMDB_API_KEY)throw fail('Set TMDB_API_KEY in the server environment to enable movie search.',503);const u=new URL('https://api.themoviedb.org/3'+path);u.searchParams.set('api_key',process.env.TMDB_API_KEY);for(const[k,v]of Object.entries(params))if(v)u.searchParams.set(k,v);return api(u);}
 async function search(u){const title=(u.searchParams.get('q')||'').slice(0,180),year=u.searchParams.get('year')||'',hint=langCode(u.searchParams.get('language')),imdb=title.match(/tt\d{7,10}/)?.[0];if(!title.trim())throw fail('Enter a movie title.');let results;
   if(imdb)results=(await tmdb('/find/'+imdb,{external_source:'imdb_id'})).movie_results||[];
-  else {results=(await tmdb('/search/movie',{query:title,year,include_adult:'false'})).results||[];if(!results.length&&year)results=(await tmdb('/search/movie',{query:title,include_adult:'false'})).results||[];}
+  else {
+    results=(await tmdb('/search/movie',{query:title,year,include_adult:'false'})).results||[];
+    if(!results.length&&year)results=(await tmdb('/search/movie',{query:title,include_adult:'false'})).results||[];
+    if(!results.length){
+      const cleaned=title.replace(/[:\-–—]\s*(encore|re-release|re-issue|imax|scope|flat|infinity\s*vision|part\s*\d+).*$/i,'').trim();
+      if(cleaned&&cleaned!==title){
+        results=(await tmdb('/search/movie',{query:cleaned,year,include_adult:'false'})).results||[];
+        if(!results.length&&year)results=(await tmdb('/search/movie',{query:cleaned,include_adult:'false'})).results||[];
+      }
+    }
+    if(!results.length&&/[:\-–—]/.test(title)){
+      const primary=title.split(/[:\-–—]/)[0].trim();
+      if(primary.length>2&&primary!==title){
+        results=(await tmdb('/search/movie',{query:primary,year,include_adult:'false'})).results||[];
+        if(!results.length&&year)results=(await tmdb('/search/movie',{query:primary,include_adult:'false'})).results||[];
+      }
+    }
+  }
   const score=(m,i)=>20-i*3+([m.title,m.original_title].some(t=>norm(t)===norm(title))?50:0)+(year&&m.release_date?.startsWith(year)?30:0)+(hint&&hint===m.original_language?25:0);
   return results.slice(0,12).map((m,i)=>({...m,score:score(m,i)})).sort((a,b)=>b.score-a.score);
 }
@@ -36,11 +53,130 @@ export async function imageBytes(value){
   const data=value.match(/^data:image\/(png|jpeg|webp|gif);base64,([a-z0-9+/=\s]+)$/i);
   if(data){const b=Buffer.from(data[2],'base64');if(b.length>LIMIT)throw fail('Image exceeds 10 MB.');return {buffer:b,mime:'image/'+data[1].toLowerCase()};}
   let u;try{u=new URL(value);}catch{throw fail('Invalid image URL.');}
-  if(u.protocol!=='https:'||u.port||u.username||u.password||!['image.tmdb.org','i.ytimg.com'].includes(u.hostname))throw fail('Embedding and downloads support TMDB images or uploaded images. Upload this external image instead.');
+  if(u.protocol!=='https:'||u.port||u.username||u.password||!['image.tmdb.org','i.ytimg.com','upload.wikimedia.org','wikimedia.org'].includes(u.hostname))throw fail('Embedding and downloads support TMDB images or uploaded images. Upload this external image instead.');
   const r=await fetch(u,{signal:AbortSignal.timeout(20000),redirect:'error'});if(!r.ok)throw fail('Could not download image.',502);
   const mime=r.headers.get('content-type')?.split(';')[0];if(!['image/jpeg','image/png','image/webp','image/gif'].includes(mime))throw fail('The address did not return an image.');
   let chunks=[],size=0;for await(const c of r.body){size+=c.length;if(size>LIMIT){throw fail('Image exceeds 10 MB.');}chunks.push(c);}return {buffer:Buffer.concat(chunks),mime};
 }
+async function dependency(pkg) {
+  try {
+    return await import(pkg);
+  } catch {
+    return null;
+  }
+}
+
+let youtubeQuotaExceeded = false;
+const youtubeCache = new Map();
+
+async function fetchMovieAssets(title, year, language) {
+  let poster_remote = '';
+  let tmdb_id = null;
+  let trailer_url = '';
+
+  if (title) {
+    // 1. Multi-tier TMDB Search Strategy (Exact -> No Year -> Cleaned Base Title)
+    if (process.env.TMDB_API_KEY) {
+      const cleanTitle = title.replace(/[:\-–—]\s*(encore|re-release|re-issue|imax|scope|flat|infinity\s*vision|part\s*\d+).*$/i, '').trim();
+      const searchQueries = [
+        { q: title, year },
+        { q: title, year: '' },
+        { q: cleanTitle, year: '' }
+      ].filter(item => item.q);
+
+      for (const queryObj of searchQueries) {
+        if (poster_remote && trailer_url) break;
+        try {
+          const u = new URL('http://localhost/api/search');
+          u.searchParams.set('q', queryObj.q);
+          if (queryObj.year) u.searchParams.set('year', queryObj.year);
+          if (language) u.searchParams.set('language', language);
+          const results = await search(u);
+          if (results && results.length > 0) {
+            const top = results[0];
+            if (!tmdb_id) tmdb_id = top.id;
+            if (!poster_remote && top.poster_path) {
+              poster_remote = `https://image.tmdb.org/t/p/w500${top.poster_path}`;
+            }
+            try {
+              const det = await detail(top.id, language);
+              if (!trailer_url && det.videos && det.videos.length > 0) {
+                trailer_url = det.videos[0].url;
+              }
+              if (!poster_remote && det.images?.poster?.[0]?.url) {
+                poster_remote = det.images.poster[0].url;
+              }
+            } catch {
+              // ignore detail error
+            }
+          }
+        } catch {
+          // ignore tmdb search error
+        }
+      }
+    }
+
+    // 2. YouTube Search for Trailer
+    if (!trailer_url && process.env.YOUTUBE_API_KEY && !youtubeQuotaExceeded) {
+      const q = (title + (year ? ' ' + year : '')).trim().toLowerCase();
+      if (youtubeCache.has(q)) {
+        const cached = youtubeCache.get(q);
+        if (cached.length > 0) trailer_url = cached[0].url;
+      } else {
+        try {
+          const url = new URL('https://www.googleapis.com/youtube/v3/search');
+          url.search = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '1', q: title + ' official trailer', key: process.env.YOUTUBE_API_KEY });
+          const d = await api(url);
+          const videos = (d.items || []).map(v => ({ name: v.snippet.title, url: youtubeURL(v.id.videoId), type: 'YouTube search' }));
+          youtubeCache.set(q, videos);
+          if (videos.length > 0) trailer_url = videos[0].url;
+        } catch (err) {
+          if (err.message && (err.message.includes('403') || err.message.includes('quota'))) {
+            youtubeQuotaExceeded = true;
+          }
+        }
+      }
+    }
+
+    // 3. Fallback YouTube Search URL
+    if (!trailer_url) {
+      const cleanTitle = title.replace(/[:\-–—]\s*(encore|re-release|re-issue|imax|scope|flat|infinity\s*vision|part\s*\d+).*$/i, '').trim() || title;
+      trailer_url = `https://www.youtube.com/results?search_query=${encodeURIComponent((cleanTitle + ' official trailer').trim())}`;
+    }
+
+    // 4. Fallback Poster from Wikipedia API if TMDB search returns no poster
+    if (!poster_remote) {
+      const cleanTitle = title.replace(/[:\-–—]\s*(encore|re-release|re-issue|imax|scope|flat|infinity\s*vision|part\s*\d+).*$/i, '').trim() || title;
+      const wikiQueries = [cleanTitle, `${cleanTitle} (film)`, title];
+      for (const wq of wikiQueries) {
+        if (poster_remote) break;
+        try {
+          const wikiRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(wq)}`, {
+            headers: { 'User-Agent': 'MovieStudioApp/1.0 (contact@example.com)' },
+            signal: AbortSignal.timeout(4000)
+          });
+          if (wikiRes.ok) {
+            const wikiData = await wikiRes.json();
+            if (wikiData.thumbnail?.source) {
+              poster_remote = wikiData.thumbnail.source;
+            }
+          }
+        } catch {}
+      }
+    }
+
+    // 5. Fallback Poster from YouTube Video Thumbnail if poster_remote is still empty
+    if (!poster_remote && trailer_url) {
+      const ytMatch = trailer_url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
+      if (ytMatch && ytMatch[1]) {
+        poster_remote = `https://i.ytimg.com/vi/${ytMatch[1]}/hqdefault.jpg`;
+      }
+    }
+  }
+
+  return { poster_remote, tmdb_id, trailer_url };
+}
+
 function fallbackPdfText(buffer) {
   try {
     const str = buffer.toString('latin1');
@@ -133,10 +269,31 @@ export function createServer(){return http.createServer(async(req,res)=>{
     if(req.method==='GET'&&u.pathname==='/api/search')return send(res,200,{results:await search(u)});
     const match=u.pathname.match(/^\/api\/movie\/(\d+)$/);
     if(req.method==='GET'&&match)return send(res,200,await detail(match[1],u.searchParams.get('language')));
+    if(req.method==='GET'&&u.pathname==='/api/fetch-movie-assets'){
+      const title=u.searchParams.get('title')||'';
+      const year=u.searchParams.get('year')||'';
+      const lang=u.searchParams.get('language')||'';
+      return send(res,200,await fetchMovieAssets(title,year,lang));
+    }
     if(req.method==='GET'&&u.pathname==='/api/youtube'){
+      if(youtubeQuotaExceeded)throw fail('YouTube API quota reached for this session. Use manual trailer links.',403);
       if(!process.env.YOUTUBE_API_KEY)throw fail('Optional YouTube search needs YOUTUBE_API_KEY.',503);
-      const q=(u.searchParams.get('q')||'').slice(0,200);if(!q)throw fail('Enter a search title.');const url=new URL('https://www.googleapis.com/youtube/v3/search');url.search=new URLSearchParams({part:'snippet',type:'video',maxResults:'6',q:q+' official trailer',key:process.env.YOUTUBE_API_KEY});
-      const d=await api(url);return send(res,200,{videos:(d.items||[]).map(v=>({name:v.snippet.title,url:youtubeURL(v.id.videoId),type:'YouTube search',iso_639_1:''}))});
+      const q=(u.searchParams.get('q')||'').trim().toLowerCase().slice(0,200);
+      if(!q)throw fail('Enter a search title.');
+      if(youtubeCache.has(q))return send(res,200,{videos:youtubeCache.get(q)});
+      const url=new URL('https://www.googleapis.com/youtube/v3/search');url.search=new URLSearchParams({part:'snippet',type:'video',maxResults:'6',q:q+' official trailer',key:process.env.YOUTUBE_API_KEY});
+      try {
+        const d=await api(url);
+        const videos=(d.items||[]).map(v=>({name:v.snippet.title,url:youtubeURL(v.id.videoId),type:'YouTube search',iso_639_1:''}));
+        youtubeCache.set(q,videos);
+        return send(res,200,{videos});
+      } catch(err) {
+        if(err.message&&(err.message.includes('403')||err.message.includes('quota'))){
+          youtubeQuotaExceeded=true;
+          throw fail('YouTube API quota reached for this session. Use manual trailer links.',403);
+        }
+        throw err;
+      }
     }
     if(req.method==='POST'&&u.pathname==='/api/pdf')return send(res,200,{text:await pdfText(await body(req))});
     if(req.method==='POST'&&u.pathname==='/api/embed'){const b=await jsonBody(req),i=await imageBytes(b.url);return send(res,200,{url:`data:${i.mime};base64,${i.buffer.toString('base64')}`});}

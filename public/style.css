@@ -935,6 +935,7 @@ button, input, textarea, select {
   cursor: pointer;
   display: flex;
   align-items: center;
+  gap: 8px;
   border-left: 3px solid transparent;
   border-bottom: 1px solid #F3F4F6;
   user-select: none;
@@ -951,6 +952,64 @@ button, input, textarea, select {
   background-color: #F0F6FF;
   font-weight: 600;
   color: #0F172A;
+}
+
+.nl-movie-item.dragging {
+  opacity: 0.55;
+  background-color: #E0E7FF;
+  border-left-color: #6366F1;
+}
+
+.nl-drag-handle {
+  cursor: grab;
+  color: #9CA3AF;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  user-select: none;
+  padding: 0 2px;
+}
+
+.nl-drag-handle:active {
+  cursor: grabbing;
+}
+
+.nl-movie-title-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nl-reorder-controls {
+  display: flex;
+  gap: 3px;
+  opacity: 0.6;
+  transition: opacity 120ms ease;
+}
+
+.nl-movie-item:hover .nl-reorder-controls {
+  opacity: 1;
+}
+
+.nl-reorder-btn {
+  background: #F3F4F6;
+  border: 1px solid #D1D5DB;
+  color: #4B5563;
+  cursor: pointer;
+  padding: 2px 5px;
+  font-size: 10px;
+  border-radius: 4px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nl-reorder-btn:hover {
+  background: #2B6EF6;
+  color: #FFFFFF;
+  border-color: #2B6EF6;
 }
 
 .nl-form-table {

@@ -49,12 +49,16 @@ Feature Film Duration: 03:06:44
   assert.equal(movies[0].firstFrameEndCredits, '02:51:07');
 });
 
-test('generateNewsletterHTML outputs HTML string with two-column layout', () => {
-  const htmlOne = generateNewsletterHTML([{ title: 'Dune', year: '2021' }], { layoutTemplate: 'one-column' });
+test('generateNewsletterHTML outputs HTML string with custom accent color and font family', () => {
+  const htmlOne = generateNewsletterHTML([{ title: 'Dune', year: '2021' }], { layoutTemplate: 'one-column', accentColor: '#e11d48', fontFamily: 'serif' });
   assert.ok(htmlOne.includes('Dune'));
+  assert.ok(htmlOne.includes('#e11d48'));
+  assert.ok(htmlOne.includes('Georgia'));
 
-  const htmlTwo = generateNewsletterHTML([{ title: 'Movie 1' }, { title: 'Movie 2' }], { layoutTemplate: 'two-column' });
+  const htmlTwo = generateNewsletterHTML([{ title: 'Movie 1' }, { title: 'Movie 2' }], { layoutTemplate: 'two-column', accentColor: '#10b981', fontFamily: 'monospace' });
   assert.ok(htmlTwo.includes('Movie 1'));
   assert.ok(htmlTwo.includes('Movie 2'));
+  assert.ok(htmlTwo.includes('#10b981'));
+  assert.ok(htmlTwo.includes('Courier New'));
   assert.ok(htmlTwo.includes('width=\'50%\''));
 });
