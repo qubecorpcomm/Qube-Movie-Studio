@@ -29,6 +29,18 @@
         "updatedAt": {
           "type": "string",
           "format": "date-time"
+        },
+        "custom_tmdb_key": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "custom_yt_key": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "keysUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
         }
       },
       "required": ["userId", "email"]

@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Movie Studio - Discover. Curate. Share.</title>
+  <title>Qube Movie Finder Studio - Discover. Curate. Share.</title>
   <meta name="description" content="Bring in your titles. Find the artwork. Build something worth opening.">
-  <meta property="og:title" content="Movie Studio">
+  <meta property="og:title" content="Qube Movie Finder Studio">
   <meta property="og:description" content="Bring in your titles. Find the artwork. Build something worth opening.">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -15,9 +15,9 @@
     <!-- LEFT SIDEBAR -->
     <aside class="sidebar">
       <div class="brand-block" role="banner">
-        <div class="brand-icon">M</div>
+        <div class="brand-icon">Q</div>
         <div class="brand-text">
-          <span class="brand-title">Movie Studio</span>
+          <span class="brand-title">Qube Movie Finder Studio</span>
           <span class="brand-tagline">DISCOVER. CURATE. SHARE.</span>
         </div>
       </div>
@@ -162,13 +162,18 @@
               <div class="toolbar-actions">
                 <button class="btn btn-secondary btn-sm" id="btnExportCSVArtwork">Export CSV</button>
                 <button class="btn btn-primary btn-sm" id="btnFindArtworkAll">Find artwork for all</button>
-                <button class="btn btn-secondary btn-sm" id="btnDownloadZipTop">Download artwork ZIP</button>
+                <button class="btn btn-secondary btn-sm" id="btnDownloadPostersAll">⬇ Download Selected Posters</button>
+                <button class="btn btn-secondary btn-sm" id="btnDownloadZipTop">⬇ Download Selected Artwork ZIP</button>
               </div>
             </div>
 
             <div class="collection-grid">
               <div class="panel-card collection-list-card">
-                <div class="list-filter-row">
+                <div class="list-filter-row" style="display:flex; align-items:center; gap:8px;">
+                  <label class="checkbox-label" style="font-size:12px; white-space:nowrap; cursor:pointer;" title="Select or deselect all movies">
+                    <input type="checkbox" id="selectAllArtwork" checked />
+                    <span>All</span>
+                  </label>
                   <input type="text" id="movieFilterInputArtwork" class="form-input filter-input" placeholder="Filter movies…">
                   <span class="filter-count" id="filterCountArtwork">0 movies</span>
                 </div>
@@ -217,12 +222,18 @@
               <div class="toolbar-actions">
                 <button class="btn btn-secondary btn-sm" id="btnExportCSVTrailers">Export CSV</button>
                 <button class="btn btn-primary btn-sm" id="btnFindTrailersAll">Find trailers & teasers</button>
+                <button class="btn btn-primary btn-sm" id="btnDownloadTrailersVideoBatch">⬇ Download Selected Trailer MP4s</button>
+                <button class="btn btn-secondary btn-sm" id="btnDownloadTrailersAll">⬇ Download Selected Links</button>
               </div>
             </div>
 
             <div class="collection-grid">
               <div class="panel-card collection-list-card">
-                <div class="list-filter-row">
+                <div class="list-filter-row" style="display:flex; align-items:center; gap:8px;">
+                  <label class="checkbox-label" style="font-size:12px; white-space:nowrap; cursor:pointer;" title="Select or deselect all movies">
+                    <input type="checkbox" id="selectAllTrailers" checked />
+                    <span>All</span>
+                  </label>
                   <input type="text" id="movieFilterInputTrailers" class="form-input filter-input" placeholder="Filter movies…">
                   <span class="filter-count" id="filterCountTrailers">0 movies</span>
                 </div>
@@ -240,27 +251,6 @@
 
         <!-- TOOL 03: NEWSLETTER -->
         <section id="view-newsletter" class="view-panel">
-          <!-- IMPORT CARD FOR NEWSLETTER -->
-          <div class="panel-card import-card" style="margin-bottom: 20px;">
-            <div class="section-head">
-              <div>
-                <h2 class="card-heading">Import titles for Newsletter</h2>
-                <p class="card-subheading">Paste movie titles, or upload a TXT, CSV or selectable-text PDF report to build your newsletter.</p>
-              </div>
-            </div>
-
-            <div class="import-grid">
-              <div class="textarea-wrap">
-                <textarea id="newsletterInputText" class="form-textarea" rows="3" placeholder="Paste movie titles (one per line) or IMDb IDs..."></textarea>
-              </div>
-              <div class="import-actions">
-                <button class="btn btn-primary btn-full" id="btnAddTitlesNewsletter">Add titles to Newsletter</button>
-                <button class="btn btn-secondary btn-full" id="btnImportFileNewsletter">↑ Upload PDF / List</button>
-                <input type="file" id="fileImportInputNewsletter" accept=".txt,.csv,.pdf" style="display:none;">
-                <p class="help-text">One title per line. Qube reports keep CPL details and durations.</p>
-              </div>
-            </div>
-          </div>
           <div class="newsletter-grid">
             <!-- LEFT: CONTROLS CARD -->
             <div class="panel-card nl-controls-card">
@@ -306,8 +296,8 @@
                   <div class="form-group">
                     <label class="form-label" for="nlAccentColor">Accent Color</label>
                     <div style="display:flex;align-items:center;gap:10px;">
-                      <input type="color" id="nlAccentColor" class="form-color-input" value="#2b6ef6" style="width:40px;height:36px;padding:2px;border:1px solid var(--border-color, #cbd5e1);border-radius:6px;cursor:pointer;background:none;">
-                      <input type="text" id="nlAccentColorHex" class="form-input" value="#2b6ef6" placeholder="#2b6ef6" style="width:110px;font-family:monospace;">
+                      <input type="color" id="nlAccentColor" class="form-color-input" value="#3066be" style="width:40px;height:36px;padding:2px;border:1px solid var(--border-color, #cbd5e1);border-radius:6px;cursor:pointer;background:none;">
+                      <input type="text" id="nlAccentColorHex" class="form-input" value="#3066be" placeholder="#3066be" style="width:110px;font-family:monospace;">
                     </div>
                   </div>
 
@@ -463,9 +453,14 @@
                     <label class="nl-row-label" for="nlDetailPosterUrl">Poster URL:</label>
                     <div class="nl-row-input nl-input-with-fetch">
                       <input type="text" id="nlDetailPosterUrl" class="form-input nl-control" placeholder="/w500/... or https://...">
-                      <button type="button" class="btn btn-secondary btn-sm nl-btn-fetch" id="btnNlFetchPoster">Fetch</button>
                       <button type="button" class="btn btn-secondary btn-sm" id="btnNlUploadPoster" title="Upload poster image">Upload</button>
                       <input type="file" id="fileNlPosterInput" accept="image/*" style="display:none;">
+                    </div>
+                  </div>
+                  <div class="nl-form-row">
+                    <label class="nl-row-label" for="nlDetailTrailerUrl">Trailer Link:</label>
+                    <div class="nl-row-input">
+                      <input type="text" id="nlDetailTrailerUrl" class="form-input nl-control" placeholder="https://www.youtube.com/watch?v=... or mailto:...">
                     </div>
                   </div>
                   <div class="nl-form-row">
@@ -474,35 +469,6 @@
                       <input type="checkbox" id="nlDetailInclude" checked style="width:18px;height:18px;accent-color:#2b6ef6;cursor:pointer;">
                       <span style="font-size:12px;color:#64748b;">Checked = appears in exported newsletter email</span>
                     </div>
-                  </div>
-                  <div class="nl-form-row">
-                    <label class="nl-row-label" for="nlDetailPosterMode">Poster Mode:</label>
-                    <div class="nl-row-input">
-                      <select id="nlDetailPosterMode" class="form-select nl-control">
-                        <option value="auto">Auto (TMDB)</option>
-                        <option value="manual">Manual URL</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div class="nl-form-row">
-                    <label class="nl-row-label" for="nlDetailTrailerUrl">Trailer Link:</label>
-                    <div class="nl-row-input nl-input-with-fetch">
-                      <input type="text" id="nlDetailTrailerUrl" class="form-input nl-control" placeholder="https://www.youtube.com/watch?v=... or mailto:...">
-                      <button type="button" class="btn btn-secondary btn-sm nl-btn-fetch" id="btnNlFetchTrailer">Fetch</button>
-                    </div>
-                  </div>
-                  <div class="nl-form-row">
-                    <label class="nl-row-label" for="nlDetailTrailerMode">Trailer Mode:</label>
-                    <div class="nl-row-input">
-                      <select id="nlDetailTrailerMode" class="form-select nl-control">
-                        <option value="auto">Auto (TMDB/YouTube)</option>
-                        <option value="manual">Manual URL/Mailto</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div class="nl-actions-row">
-                    <button type="button" class="btn btn-primary nl-btn-action" id="btnNlApplyChanges">Apply Changes</button>
-                    <button type="button" class="btn btn-secondary nl-btn-action" id="btnNlUpdatePreview">Update Preview</button>
                   </div>
                 </div>
               </fieldset>

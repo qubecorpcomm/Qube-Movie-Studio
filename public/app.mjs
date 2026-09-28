@@ -90,7 +90,7 @@ const state = {
     secondBannerLink: 'https://www.qubewire.com',
     footer: '© Qube Cinema Inc. / QubeWire. All rights reserved. For technical assistance or KDM inquiries, please contact our 24/7 Help Desk.',
     layoutTemplate: 'theatrical-bulletin',
-    accentColor: '#2b6ef6',
+    accentColor: '#3066be',
     fontFamily: 'sans-serif'
   }
 };
@@ -808,6 +808,37 @@ function setupEventHandlers() {
   const btnZip = document.getElementById('btnDownloadZipTop');
   if (btnZip) btnZip.addEventListener('click', downloadArtworkZIP);
 
+  // Download All Posters button in Artwork toolbar
+  const btnDlPostersAll = document.getElementById('btnDownloadPostersAll');
+  if (btnDlPostersAll) btnDlPostersAll.addEventListener('click', downloadAllPosters);
+
+  // Download Selected Trailer MP4s in Trailers toolbar
+  const btnDlTrailersVideoBatch = document.getElementById('btnDownloadTrailersVideoBatch');
+  if (btnDlTrailersVideoBatch) btnDlTrailersVideoBatch.addEventListener('click', downloadSelectedTrailersVideo);
+
+  // Download Trailer Links button in Trailers toolbar
+  const btnDlTrailersAll = document.getElementById('btnDownloadTrailersAll');
+  if (btnDlTrailersAll) btnDlTrailersAll.addEventListener('click', downloadAllTrailerLinks);
+
+  // Select All / Deselect All checkboxes
+  const selAllArt = document.getElementById('selectAllArtwork');
+  if (selAllArt) {
+    selAllArt.addEventListener('change', (e) => {
+      const isChecked = e.target.checked;
+      (state.artwork?.movies || []).forEach(m => { m.checked = isChecked; });
+      updateAllUI();
+    });
+  }
+
+  const selAllTrl = document.getElementById('selectAllTrailers');
+  if (selAllTrl) {
+    selAllTrl.addEventListener('change', (e) => {
+      const isChecked = e.target.checked;
+      (state.trailers?.movies || []).forEach(m => { m.checked = isChecked; });
+      updateAllUI();
+    });
+  }
+
   // API Key & Connection Modal setup
   const connModal = document.getElementById('connModal');
   const btnConnDetails = document.getElementById('btnConnDetails');
@@ -894,11 +925,18 @@ function setupEventHandlers() {
       if (currentUser && db) {
         try {
           await setDoc(doc(db, 'users', currentUser.uid), {
-            custom_tmdb_key: tmdbVal || null,
-            custom_yt_key: ytVal || null,
-            keysUpdatedAt: new Date().toISOString()
+            userId: currentUser.uid,
+            email: currentUser.email || '',
+            displayName: currentUser.displayName || currentUser.email || 'User',
+            photoURL: currentUser.photoURL || '',
+            custom_tmdb_key: tmdbVal || '',
+            custom_yt_key: ytVal || '',
+            keysUpdatedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
           }, { merge: true });
-        } catch {}
+        } catch (err) {
+          console.warn('Could not sync keys to Firestore profile:', err);
+        }
       }
 
       await checkAPIStatus();
@@ -932,10 +970,18 @@ function setupEventHandlers() {
       if (currentUser && db) {
         try {
           await setDoc(doc(db, 'users', currentUser.uid), {
-            custom_tmdb_key: null,
-            custom_yt_key: null
+            userId: currentUser.uid,
+            email: currentUser.email || '',
+            displayName: currentUser.displayName || currentUser.email || 'User',
+            photoURL: currentUser.photoURL || '',
+            custom_tmdb_key: '',
+            custom_yt_key: '',
+            keysUpdatedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
           }, { merge: true });
-        } catch {}
+        } catch (err) {
+          console.warn('Could not clear keys from Firestore profile:', err);
+        }
       }
       await checkAPIStatus();
       if (apiKeysNotice) {
@@ -1243,6 +1289,19 @@ function renderCollectionList() {
       listEl.appendChild(row);
     });
   });
+
+  // Sync Select All checkbox states
+  const artMovies = state.artwork?.movies || [];
+  const selAllArt = document.getElementById('selectAllArtwork');
+  if (selAllArt && artMovies.length > 0) {
+    selAllArt.checked = artMovies.every(m => m.checked !== false);
+  }
+
+  const trlMovies = state.trailers?.movies || [];
+  const selAllTrl = document.getElementById('selectAllTrailers');
+  if (selAllTrl && trlMovies.length > 0) {
+    selAllTrl.checked = trlMovies.every(m => m.checked !== false);
+  }
 }
 
 // Render Selected Movie Detail Panel strictly per tool
@@ -1276,15 +1335,20 @@ function renderSelectedMovieDetail() {
       return;
     }
 
-    card.innerHTML = buildDetailCardHTML(m, tool);
-    bindDetailCardEvents(card, m, tool);
+    if (tool === 'artwork') {
+      card.innerHTML = buildArtworkDetailCardHTML(m);
+      bindArtworkDetailCardEvents(card, m);
+    } else {
+      card.innerHTML = buildTrailerDetailCardHTML(m);
+      bindTrailerDetailCardEvents(card, m);
+    }
   });
 }
 
-// Build Detail Card Markup
-function buildDetailCardHTML(m, tabType) {
+// Build Detail Card Markup for Posters & Artwork Panel ONLY
+function buildArtworkDetailCardHTML(m) {
   const matchOptions = (m.tmdbCandidates || []).map(c => `
-    <option value="${c.id}" ${c.id === m.id ? 'selected' : ''}>${c.title} (${c.release_date ? c.release_date.slice(0, 4) : 'N/A'}) · ${c.original_language || 'en'}</option>
+    <option value="${c.id}" ${c.id === m.id ? 'selected' : ''}>${escapeHTML(c.title)} (${c.release_date ? c.release_date.slice(0, 4) : 'N/A'}) · ${c.original_language || 'en'}</option>
   `).join('');
 
   const posterUrl = m.posterUrl || m.selectedPoster || m.images?.poster?.[0]?.url || '';
@@ -1303,29 +1367,21 @@ function buildDetailCardHTML(m, tabType) {
     <option value="${l.url}" ${l.url === logoUrl ? 'selected' : ''}>${l.iso_639_1 || 'orig'} · ${l.width}x${l.height}</option>
   `).join('');
 
-  const trailerSelectOpts = (m.videos || []).map(v => `
-    <option value="${v.url}" ${v.url === (m.trailerUrl || m.selectedTrailer) ? 'selected' : ''}>${v.name} · ${v.type} (${v.iso_639_1 || 'en'})</option>
-  `).join('');
-
-  const activeTrailerUrl = m.trailerUrl || m.selectedTrailer || m.videos?.[0]?.url || '';
-  const youtubeVideoId = extractYouTubeID(activeTrailerUrl);
-
   const tmdbLink = m.id ? `https://www.themoviedb.org/movie/${m.id}` : '#';
   const imdbLink = m.imdb_id ? `https://www.imdb.com/title/${m.imdb_id}` : '#';
-
   const languages = ['Tamil', 'Telugu', 'Malayalam', 'Hindi', 'Kannada', 'English', 'Spanish', 'French', 'German', 'Italian', 'Japanese', 'Korean', 'Mandarin', 'Cantonese', 'Arabic', 'Russian'];
 
   return `
     <div class="detail-header">
       <div>
         <div class="detail-title-row">
-          <h2 class="card-heading">${m.title}</h2>
-          <span class="pill">MOVIE DETAILS</span>
+          <h2 class="card-heading">${escapeHTML(m.title)}</h2>
+          <span class="pill">POSTERS &amp; ARTWORK</span>
         </div>
         <div class="card-subheading">${m.statusText || 'Pending'}</div>
       </div>
       <div class="detail-actions-row">
-        <button class="btn btn-primary btn-sm" id="btnSearchSingle">Search this movie</button>
+        <button class="btn btn-primary btn-sm" id="btnSearchSingle">Search artwork</button>
         <button class="btn btn-secondary btn-sm" id="btnMoveUp" title="Move up">↑</button>
         <button class="btn btn-secondary btn-sm" id="btnMoveDown" title="Move down">↓</button>
         <button class="btn btn-danger btn-sm" id="btnRemoveMovie">Remove</button>
@@ -1340,14 +1396,14 @@ function buildDetailCardHTML(m, tabType) {
     ` : ''}
 
     <div class="form-group" style="margin-bottom: 16px;">
-      <label class="form-label" for="selectLanguage">Preferred artwork and trailer language</label>
+      <label class="form-label" for="selectLanguage">Preferred artwork language</label>
       <select id="selectLanguage" class="form-select">
         <option value="">Automatic / original</option>
         ${languages.map(l => `<option value="${l}" ${langCode(l) === langCode(m.language) ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
     </div>
 
-    <!-- ARTWORK GRID -->
+    <!-- ARTWORK 3-COL GRID -->
     <div class="artwork-3col-grid">
       <div class="art-slot">
         <div class="art-slot-label">Poster</div>
@@ -1355,9 +1411,12 @@ function buildDetailCardHTML(m, tabType) {
           ${posterUrl ? `<img src="${posterUrl}" alt="Poster" />` : '—'}
         </div>
         <select id="selectPoster" class="form-select form-select-sm">
-          ${posterSelectOpts || '<option>No artwork found</option>'}
+          ${posterSelectOpts || '<option>No poster found</option>'}
         </select>
-        ${posterUrl ? `<a href="${posterUrl}" target="_blank" class="art-slot-link">Open full size ↗</a>` : ''}
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+          ${posterUrl ? `<a href="${posterUrl}" target="_blank" rel="noopener noreferrer" class="art-slot-link">Open ↗</a>` : '<span></span>'}
+          ${posterUrl ? `<button type="button" class="btn btn-secondary btn-sm btn-download-art" data-url="${escapeHTML(posterUrl)}" data-name="${escapeHTML(m.title)}_poster.jpg" style="padding:2px 7px;font-size:11px;">⬇ Save</button>` : ''}
+        </div>
       </div>
 
       <div class="art-slot">
@@ -1366,9 +1425,12 @@ function buildDetailCardHTML(m, tabType) {
           ${backdropUrl ? `<img src="${backdropUrl}" alt="Backdrop" />` : '—'}
         </div>
         <select id="selectBackdrop" class="form-select form-select-sm">
-          ${backdropSelectOpts || '<option>No artwork found</option>'}
+          ${backdropSelectOpts || '<option>No backdrop found</option>'}
         </select>
-        ${backdropUrl ? `<a href="${backdropUrl}" target="_blank" class="art-slot-link">Open full size ↗</a>` : ''}
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+          ${backdropUrl ? `<a href="${backdropUrl}" target="_blank" rel="noopener noreferrer" class="art-slot-link">Open ↗</a>` : '<span></span>'}
+          ${backdropUrl ? `<button type="button" class="btn btn-secondary btn-sm btn-download-art" data-url="${escapeHTML(backdropUrl)}" data-name="${escapeHTML(m.title)}_backdrop.jpg" style="padding:2px 7px;font-size:11px;">⬇ Save</button>` : ''}
+        </div>
       </div>
 
       <div class="art-slot">
@@ -1377,141 +1439,137 @@ function buildDetailCardHTML(m, tabType) {
           ${logoUrl ? `<img src="${logoUrl}" alt="Logo" />` : '—'}
         </div>
         <select id="selectLogo" class="form-select form-select-sm">
-          ${logoSelectOpts || '<option>No artwork found</option>'}
+          ${logoSelectOpts || '<option>No logo found</option>'}
         </select>
-        ${logoUrl ? `<a href="${logoUrl}" target="_blank" class="art-slot-link">Open full size ↗</a>` : ''}
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+          ${logoUrl ? `<a href="${logoUrl}" target="_blank" rel="noopener noreferrer" class="art-slot-link">Open ↗</a>` : '<span></span>'}
+          ${logoUrl ? `<button type="button" class="btn btn-secondary btn-sm btn-download-art" data-url="${escapeHTML(logoUrl)}" data-name="${escapeHTML(m.title)}_logo.png" style="padding:2px 7px;font-size:11px;">⬇ Save</button>` : ''}
+        </div>
       </div>
+    </div>
+
+    <!-- POSTER URL & UPLOAD -->
+    <div class="form-group full-width" style="margin-top: 14px;">
+      <label class="form-label" for="inputPosterUrl">Poster URL</label>
+      <input type="text" id="inputPosterUrl" class="form-input" value="${escapeHTML(posterUrl)}" placeholder="https://image.tmdb.org/... or paste custom URL">
+    </div>
+
+    <div class="form-group full-width" style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 16px;">
+      <label class="checkbox-label">
+        <input type="checkbox" id="chkKeepPoster" ${m.keepPoster ? 'checked' : ''}>
+        Keep my poster when searching
+      </label>
+      <div style="display:flex; gap:6px;">
+        <button class="btn btn-secondary btn-sm" id="btnUploadPoster">Upload a poster</button>
+        ${posterUrl ? `<button type="button" class="btn btn-secondary btn-sm" id="btnDownloadCurrentPoster" title="Download this poster image">⬇ Download poster</button>` : ''}
+      </div>
+      <input type="file" id="filePosterInput" accept="image/*" style="display:none;">
     </div>
 
     <div style="display:flex; gap:12px; margin-bottom:14px; font-size:12px;">
-      ${m.id ? `<a href="${tmdbLink}" target="_blank" style="color:var(--primary-green); text-decoration:none;">TMDB ↗</a>` : ''}
-      ${m.imdb_id ? `<a href="${imdbLink}" target="_blank" style="color:var(--primary-green); text-decoration:none;">IMDb ↗</a>` : ''}
-    </div>
-
-    <!-- FORM EDITING GRID -->
-    <div class="form-grid-2col">
-      <div class="form-group full-width">
-        <label class="form-label" for="inputMovieTitle">Movie title</label>
-        <input type="text" id="inputMovieTitle" class="form-input" value="${escapeHTML(m.title)}">
-      </div>
-
-      <div class="form-group">
-        <label class="form-label" for="inputYear">Year</label>
-        <input type="text" id="inputYear" class="form-input" value="${escapeHTML(m.year)}">
-      </div>
-
-      <div class="form-group">
-        <label class="form-label" for="inputLanguage">Language</label>
-        <input type="text" id="inputLanguage" class="form-input" value="${escapeHTML(m.language)}">
-      </div>
-
-      <div class="form-group full-width">
-        <label class="form-label" for="inputDistributor">Distributor</label>
-        <input type="text" id="inputDistributor" class="form-input" value="${escapeHTML(m.distributor)}">
-      </div>
-
-      <div class="form-group full-width">
-        <label class="form-label" for="inputPosterUrl">Poster URL</label>
-        <input type="text" id="inputPosterUrl" class="form-input" value="${escapeHTML(posterUrl)}">
-      </div>
-
-      <div class="form-group full-width" style="display:flex; justify-content:space-between; align-items:center;">
-        <label class="checkbox-label">
-          <input type="checkbox" id="chkKeepPoster" ${m.keepPoster ? 'checked' : ''}>
-          Keep my poster when searching
-        </label>
-        <button class="btn btn-secondary btn-sm" id="btnUploadPoster">Upload a poster</button>
-        <input type="file" id="filePosterInput" accept="image/*" style="display:none;">
-      </div>
-
-      <!-- TRAILER SECTION -->
-      <div class="mini-heading">TRAILER & TEASER</div>
-
-      <div class="form-group full-width">
-        <label class="form-label" for="selectTrailer">Video alternatives</label>
-        <select id="selectTrailer" class="form-select">${trailerSelectOpts || '<option value="">No trailers found</option>'}</select>
-      </div>
-
-      <div class="form-group full-width">
-        <label class="form-label" for="inputTrailerUrl">Trailer link / YouTube video ID</label>
-        <input type="text" id="inputTrailerUrl" class="form-input" value="${escapeHTML(activeTrailerUrl)}">
-      </div>
-
-      <div class="form-group full-width" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-        <label class="checkbox-label">
-          <input type="checkbox" id="chkKeepTrailer" ${m.keepTrailer ? 'checked' : ''}>
-          Keep my trailer when searching
-        </label>
-        <div style="display:flex; gap:6px;">
-          <button class="btn btn-secondary btn-sm" id="btnUsePastedTrailer">Use pasted link</button>
-          <button class="btn btn-secondary btn-sm" id="btnSearchYouTube">Search YouTube API</button>
-          ${activeTrailerUrl ? `<a href="${activeTrailerUrl}" target="_blank" class="btn btn-secondary btn-sm">Watch ↗</a>` : ''}
-        </div>
-      </div>
-
-      ${youtubeVideoId ? `
-        <div class="form-group full-width">
-          <div class="iframe-preview-wrap">
-            <iframe src="https://www.youtube-nocookie.com/embed/${youtubeVideoId}" title="YouTube Video Preview" allowfullscreen></iframe>
-          </div>
-        </div>
-      ` : ''}
-
-      <!-- NEWSLETTER & TECHNICAL DETAILS -->
-      <div class="mini-heading">NEWSLETTER & TECHNICAL DETAILS</div>
-
-      <div class="form-group full-width">
-        <label class="form-label" for="inputSynopsis">Synopsis</label>
-        <textarea id="inputSynopsis" class="form-textarea" rows="3">${escapeHTML(m.overview)}</textarea>
-      </div>
-
-      <div class="form-group">
-        <label class="form-label" for="inputFeatureDuration">Feature duration</label>
-        <input type="text" id="inputFeatureDuration" class="form-input" value="${escapeHTML(m.featureDuration)}" placeholder="e.g. 02:45:00">
-      </div>
-
-      <div class="form-group">
-        <label class="form-label" for="inputCplPart1">CPL Part 1 duration</label>
-        <input type="text" id="inputCplPart1" class="form-input" value="${escapeHTML(m.cplPart1Duration)}" placeholder="e.g. 01:20:00">
-      </div>
-
-      <div class="form-group">
-        <label class="form-label" for="inputCplPart2">CPL Part 2 duration</label>
-        <input type="text" id="inputCplPart2" class="form-input" value="${escapeHTML(m.cplPart2Duration)}" placeholder="e.g. 01:25:00">
-      </div>
-
-      <div class="form-group">
-        <label class="form-label" for="inputFirstFrameEnd">First frame end credits</label>
-        <input type="text" id="inputFirstFrameEnd" class="form-input" value="${escapeHTML(m.firstFrameEndCredits)}" placeholder="e.g. 02:38:00">
-      </div>
-
-      <div class="form-group full-width">
-        <label class="form-label" for="inputFirstFrameMoving">First frame moving credits</label>
-        <input type="text" id="inputFirstFrameMoving" class="form-input" value="${escapeHTML(m.firstFrameMovingCredits)}" placeholder="e.g. 02:42:00">
-      </div>
-
-      <div class="form-group full-width">
-        <label class="form-label" for="inputCplEntries">CPL entries · one per line: part | name | duration</label>
-        <textarea id="inputCplEntries" class="form-textarea" rows="3" placeholder="1 | VIKRAM_PART1 | 01:20:00&#10;2 | VIKRAM_PART2 | 01:25:00">${escapeHTML(m.cplEntries)}</textarea>
-      </div>
-
-      <div class="form-group full-width" style="margin-top: 10px;">
-        <button class="btn btn-primary btn-full" id="btnApplyMovieChanges">Apply changes</button>
-      </div>
+      ${m.id ? `<a href="${tmdbLink}" target="_blank" rel="noopener noreferrer" style="color:var(--primary-green); text-decoration:none;">TMDB ↗</a>` : ''}
+      ${m.imdb_id ? `<a href="${imdbLink}" target="_blank" rel="noopener noreferrer" style="color:var(--primary-green); text-decoration:none;">IMDb ↗</a>` : ''}
     </div>
   `;
 }
 
-// Bind Detail Card Interactive Events
-function bindDetailCardEvents(card, m, tool = 'artwork') {
-  // Reorder / remove
+// Build Detail Card Markup for Trailers & Teasers Panel ONLY
+function buildTrailerDetailCardHTML(m) {
+  const matchOptions = (m.tmdbCandidates || []).map(c => `
+    <option value="${c.id}" ${c.id === m.id ? 'selected' : ''}>${escapeHTML(c.title)} (${c.release_date ? c.release_date.slice(0, 4) : 'N/A'}) · ${c.original_language || 'en'}</option>
+  `).join('');
+
+  const trailerSelectOpts = (m.videos || []).map(v => `
+    <option value="${v.url}" ${v.url === (m.trailerUrl || m.selectedTrailer) ? 'selected' : ''}>${escapeHTML(v.name)} · ${v.type} (${v.iso_639_1 || 'en'})</option>
+  `).join('');
+
+  const activeTrailerUrl = m.trailerUrl || m.selectedTrailer || m.videos?.[0]?.url || '';
+  const youtubeVideoId = extractYouTubeID(activeTrailerUrl);
+
+  const tmdbLink = m.id ? `https://www.themoviedb.org/movie/${m.id}` : '#';
+  const imdbLink = m.imdb_id ? `https://www.imdb.com/title/${m.imdb_id}` : '#';
+  const languages = ['Tamil', 'Telugu', 'Malayalam', 'Hindi', 'Kannada', 'English', 'Spanish', 'French', 'German', 'Italian', 'Japanese', 'Korean', 'Mandarin', 'Cantonese', 'Arabic', 'Russian'];
+
+  return `
+    <div class="detail-header">
+      <div>
+        <div class="detail-title-row">
+          <h2 class="card-heading">${escapeHTML(m.title)}</h2>
+          <span class="pill">TRAILERS &amp; TEASERS</span>
+        </div>
+        <div class="card-subheading">${m.statusText || 'Pending'}</div>
+      </div>
+      <div class="detail-actions-row">
+        <button class="btn btn-primary btn-sm" id="btnSearchSingle">Search trailers</button>
+        <button class="btn btn-secondary btn-sm" id="btnMoveUp" title="Move up">↑</button>
+        <button class="btn btn-secondary btn-sm" id="btnMoveDown" title="Move down">↓</button>
+        <button class="btn btn-danger btn-sm" id="btnRemoveMovie">Remove</button>
+      </div>
+    </div>
+
+    ${m.tmdbCandidates && m.tmdbCandidates.length > 0 ? `
+      <div class="form-group" style="margin-bottom: 12px;">
+        <label class="form-label" for="selectMovieMatch">Movie match</label>
+        <select id="selectMovieMatch" class="form-select">${matchOptions}</select>
+      </div>
+    ` : ''}
+
+    <div class="form-group" style="margin-bottom: 16px;">
+      <label class="form-label" for="selectLanguage">Preferred trailer language</label>
+      <select id="selectLanguage" class="form-select">
+        <option value="">Automatic / original</option>
+        ${languages.map(l => `<option value="${l}" ${langCode(l) === langCode(m.language) ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>
+    </div>
+
+    <!-- TRAILER & VIDEO DISCOVERY -->
+    <div class="form-group full-width" style="margin-bottom: 12px;">
+      <label class="form-label" for="selectTrailer">Video alternatives (Trailers / Teasers / Clips)</label>
+      <select id="selectTrailer" class="form-select">${trailerSelectOpts || '<option value="">No trailers found</option>'}</select>
+    </div>
+
+    <div class="form-group full-width" style="margin-bottom: 12px;">
+      <label class="form-label" for="inputTrailerUrl">Trailer link / YouTube video URL</label>
+      <input type="text" id="inputTrailerUrl" class="form-input" value="${escapeHTML(activeTrailerUrl)}" placeholder="https://www.youtube.com/watch?v=...">
+    </div>
+
+    <div class="form-group full-width" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom: 16px;">
+      <label class="checkbox-label">
+        <input type="checkbox" id="chkKeepTrailer" ${m.keepTrailer ? 'checked' : ''}>
+        Keep my trailer when searching
+      </label>
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" id="btnUsePastedTrailer">Use pasted link</button>
+        <button class="btn btn-secondary btn-sm" id="btnSearchYouTube">Search YouTube API</button>
+        ${activeTrailerUrl ? `<a href="${activeTrailerUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">Watch ↗</a>` : ''}
+        ${activeTrailerUrl ? `<button type="button" class="btn btn-primary btn-sm" id="btnDownloadSingleTrailerVideo" title="Download MP4 trailer video file">⬇ Download Trailer (MP4)</button><button type="button" class="btn btn-secondary btn-sm" id="btnDownloadSingleTrailer" title="Download trailer link shortcut file">⬇ Link (.url)</button>` : ''}
+      </div>
+    </div>
+
+    ${youtubeVideoId ? `
+      <div class="form-group full-width" style="margin-bottom: 16px;">
+        <div class="iframe-preview-wrap">
+          <iframe src="https://www.youtube-nocookie.com/embed/${youtubeVideoId}" title="YouTube Video Preview" allowfullscreen></iframe>
+        </div>
+      </div>
+    ` : ''}
+
+    <div style="display:flex; gap:12px; margin-bottom:14px; font-size:12px;">
+      ${m.id ? `<a href="${tmdbLink}" target="_blank" rel="noopener noreferrer" style="color:var(--primary-green); text-decoration:none;">TMDB ↗</a>` : ''}
+      ${m.imdb_id ? `<a href="${imdbLink}" target="_blank" rel="noopener noreferrer" style="color:var(--primary-green); text-decoration:none;">IMDb ↗</a>` : ''}
+    </div>
+  `;
+}
+
+// Bind Artwork Detail Card Events
+function bindArtworkDetailCardEvents(card, m) {
   const btnUp = card.querySelector('#btnMoveUp');
   const btnDown = card.querySelector('#btnMoveDown');
   const btnRemove = card.querySelector('#btnRemoveMovie');
 
-  if (btnUp) btnUp.addEventListener('click', () => moveMovieOrder(m.uid, -1, tool));
-  if (btnDown) btnDown.addEventListener('click', () => moveMovieOrder(m.uid, 1, tool));
-  if (btnRemove) btnRemove.addEventListener('click', () => promptRemoveMovie(m, tool));
+  if (btnUp) btnUp.addEventListener('click', () => moveMovieOrder(m.uid, -1, 'artwork'));
+  if (btnDown) btnDown.addEventListener('click', () => moveMovieOrder(m.uid, 1, 'artwork'));
+  if (btnRemove) btnRemove.addEventListener('click', () => promptRemoveMovie(m, 'artwork'));
 
   // Search single
   const btnSearchSingle = card.querySelector('#btnSearchSingle');
@@ -1526,12 +1584,26 @@ function bindDetailCardEvents(card, m, tool = 'artwork') {
     });
   }
 
+  // Language select
+  const selLang = card.querySelector('#selectLanguage');
+  if (selLang) {
+    selLang.addEventListener('change', async (e) => {
+      m.language = e.target.value;
+      if (m.id) await loadMovieDetailFromTMDB(m, m.id);
+    });
+  }
+
   // Artwork selects
   const selPoster = card.querySelector('#selectPoster');
   const selBackdrop = card.querySelector('#selectBackdrop');
   const selLogo = card.querySelector('#selectLogo');
 
-  if (selPoster) selPoster.addEventListener('change', (e) => { m.selectedPoster = e.target.value; updateAllUI(); });
+  if (selPoster) selPoster.addEventListener('change', (e) => {
+    m.selectedPoster = e.target.value;
+    m.posterUrl = e.target.value;
+    m.poster_url = e.target.value;
+    updateAllUI();
+  });
   if (selBackdrop) selBackdrop.addEventListener('change', (e) => { m.selectedBackdrop = e.target.value; updateAllUI(); });
   if (selLogo) selLogo.addEventListener('change', (e) => { m.selectedLogo = e.target.value; updateAllUI(); });
 
@@ -1546,12 +1618,98 @@ function bindDetailCardEvents(card, m, tool = 'artwork') {
         const reader = new FileReader();
         reader.onload = (evt) => {
           m.posterUrl = evt.target.result;
+          m.poster_url = evt.target.result;
           m.selectedPoster = evt.target.result;
+          m.keepPoster = true;
           showNotice('Custom poster uploaded and selected.');
           updateAllUI();
         };
         reader.readAsDataURL(file);
       }
+    });
+  }
+
+  // Download current poster directly
+  const btnDownloadPoster = card.querySelector('#btnDownloadCurrentPoster');
+  if (btnDownloadPoster) {
+    btnDownloadPoster.addEventListener('click', () => {
+      const pUrl = m.posterUrl || m.selectedPoster || m.poster_url;
+      if (!pUrl) {
+        showNotice('No poster image available to download.', 'error');
+        return;
+      }
+      downloadFileFromUrl(pUrl, `${cleanFileName(m.title)}_poster.jpg`);
+    });
+  }
+
+  // Download individual art slot items (Poster, Backdrop, Logo)
+  card.querySelectorAll('.btn-download-art').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const url = btn.dataset.url;
+      const name = btn.dataset.name || 'artwork.jpg';
+      if (!url) {
+        showNotice('No image URL found to download.', 'error');
+        return;
+      }
+      downloadFileFromUrl(url, cleanFileName(name));
+    });
+  });
+
+  // Apply Changes button
+  const btnApply = card.querySelector('#btnApplyMovieChanges');
+  if (btnApply) {
+    btnApply.addEventListener('click', () => {
+      m.title = card.querySelector('#inputMovieTitle').value.trim() || m.title;
+      m.year = card.querySelector('#inputYear').value.trim();
+      m.language = card.querySelector('#inputLanguage').value.trim();
+      const distInput = card.querySelector('#inputDistributor');
+      if (distInput) m.distributor = distInput.value.trim();
+      const pInput = card.querySelector('#inputPosterUrl');
+      if (pInput) {
+        m.posterUrl = pInput.value.trim();
+        m.poster_url = pInput.value.trim();
+        m.selectedPoster = pInput.value.trim();
+      }
+
+      const keepPosterChk = card.querySelector('#chkKeepPoster');
+      if (keepPosterChk) m.keepPoster = keepPosterChk.checked;
+
+      showNotice(`Artwork details updated for "${m.title}".`);
+      updateAllUI();
+    });
+  }
+}
+
+// Bind Trailer Detail Card Events
+function bindTrailerDetailCardEvents(card, m) {
+  const btnUp = card.querySelector('#btnMoveUp');
+  const btnDown = card.querySelector('#btnMoveDown');
+  const btnRemove = card.querySelector('#btnRemoveMovie');
+
+  if (btnUp) btnUp.addEventListener('click', () => moveMovieOrder(m.uid, -1, 'trailers'));
+  if (btnDown) btnDown.addEventListener('click', () => moveMovieOrder(m.uid, 1, 'trailers'));
+  if (btnRemove) btnRemove.addEventListener('click', () => promptRemoveMovie(m, 'trailers'));
+
+  // Search single
+  const btnSearchSingle = card.querySelector('#btnSearchSingle');
+  if (btnSearchSingle) btnSearchSingle.addEventListener('click', () => fetchMovieMetadata(m));
+
+  // Match select
+  const selectMatch = card.querySelector('#selectMovieMatch');
+  if (selectMatch) {
+    selectMatch.addEventListener('change', async (e) => {
+      const matchId = e.target.value;
+      if (matchId) await loadMovieDetailFromTMDB(m, matchId);
+    });
+  }
+
+  // Language select
+  const selLang = card.querySelector('#selectLanguage');
+  if (selLang) {
+    selLang.addEventListener('change', async (e) => {
+      m.language = e.target.value;
+      if (m.id) await loadMovieDetailFromTMDB(m, m.id);
     });
   }
 
@@ -1561,6 +1719,7 @@ function bindDetailCardEvents(card, m, tool = 'artwork') {
     selTrailer.addEventListener('change', (e) => {
       m.selectedTrailer = e.target.value;
       m.trailerUrl = e.target.value;
+      m.trailer_url = e.target.value;
       updateAllUI();
     });
   }
@@ -1570,8 +1729,10 @@ function bindDetailCardEvents(card, m, tool = 'artwork') {
   const inputTrailerUrl = card.querySelector('#inputTrailerUrl');
   if (btnPastedTrailer && inputTrailerUrl) {
     btnPastedTrailer.addEventListener('click', () => {
-      m.trailerUrl = inputTrailerUrl.value.trim();
-      m.selectedTrailer = inputTrailerUrl.value.trim();
+      const val = inputTrailerUrl.value.trim();
+      m.trailerUrl = val;
+      m.trailer_url = val;
+      m.selectedTrailer = val;
       showNotice('Pasted trailer link applied.');
       updateAllUI();
     });
@@ -1581,8 +1742,9 @@ function bindDetailCardEvents(card, m, tool = 'artwork') {
   const btnYouTube = card.querySelector('#btnSearchYouTube');
   if (btnYouTube) {
     btnYouTube.addEventListener('click', async () => {
-      if (!state.status.youtube) {
-        showNotice('YouTube API key is missing. Set YOUTUBE_API_KEY to search.', 'error');
+      const ytKey = (localStorage.getItem('user_youtube_api_key') || '').trim();
+      if (!state.status.youtube && !ytKey) {
+        showNotice('YouTube API key is missing. Set key in Connection Details to search.', 'error');
         return;
       }
       showNotice(`Searching YouTube for ${m.title}...`);
@@ -1590,9 +1752,11 @@ function bindDetailCardEvents(card, m, tool = 'artwork') {
         const res = await apiFetch(`/api/youtube?q=${encodeURIComponent(m.title)}`);
         const data = await res.json();
         if (data.videos && data.videos.length > 0) {
+          m.videos = m.videos || [];
           m.videos.push(...data.videos);
           m.selectedTrailer = data.videos[0].url;
           m.trailerUrl = data.videos[0].url;
+          m.trailer_url = data.videos[0].url;
           showNotice(`Found ${data.videos.length} trailer alternative(s) on YouTube.`);
           updateAllUI();
         } else {
@@ -1604,6 +1768,32 @@ function bindDetailCardEvents(card, m, tool = 'artwork') {
     });
   }
 
+  // Download single trailer video file (MP4)
+  const btnDownloadSingleTrailerVideo = card.querySelector('#btnDownloadSingleTrailerVideo');
+  if (btnDownloadSingleTrailerVideo) {
+    btnDownloadSingleTrailerVideo.addEventListener('click', () => {
+      const tUrl = m.trailerUrl || m.selectedTrailer || m.trailer_url;
+      if (!tUrl) {
+        showNotice('No trailer link available to download.', 'error');
+        return;
+      }
+      downloadTrailerVideo(m.title, tUrl);
+    });
+  }
+
+  // Download single trailer shortcut file (.url)
+  const btnDownloadSingleTrl = card.querySelector('#btnDownloadSingleTrailer');
+  if (btnDownloadSingleTrl) {
+    btnDownloadSingleTrl.addEventListener('click', () => {
+      const tUrl = m.trailerUrl || m.selectedTrailer || m.trailer_url;
+      if (!tUrl) {
+        showNotice('No trailer link available to download.', 'error');
+        return;
+      }
+      downloadTrailerShortcut(m.title, tUrl);
+    });
+  }
+
   // Apply Changes button
   const btnApply = card.querySelector('#btnApplyMovieChanges');
   if (btnApply) {
@@ -1611,24 +1801,18 @@ function bindDetailCardEvents(card, m, tool = 'artwork') {
       m.title = card.querySelector('#inputMovieTitle').value.trim() || m.title;
       m.year = card.querySelector('#inputYear').value.trim();
       m.language = card.querySelector('#inputLanguage').value.trim();
-      m.distributor = card.querySelector('#inputDistributor').value.trim();
-      m.posterUrl = card.querySelector('#inputPosterUrl').value.trim();
 
-      const keepPosterChk = card.querySelector('#chkKeepPoster');
-      if (keepPosterChk) m.keepPoster = keepPosterChk.checked;
+      const tInput = card.querySelector('#inputTrailerUrl');
+      if (tInput) {
+        m.trailerUrl = tInput.value.trim();
+        m.trailer_url = tInput.value.trim();
+        m.selectedTrailer = tInput.value.trim();
+      }
 
       const keepTrailerChk = card.querySelector('#chkKeepTrailer');
       if (keepTrailerChk) m.keepTrailer = keepTrailerChk.checked;
 
-      m.overview = card.querySelector('#inputSynopsis').value.trim();
-      m.featureDuration = card.querySelector('#inputFeatureDuration').value.trim();
-      m.cplPart1Duration = card.querySelector('#inputCplPart1').value.trim();
-      m.cplPart2Duration = card.querySelector('#inputCplPart2').value.trim();
-      m.firstFrameEndCredits = card.querySelector('#inputFirstFrameEnd').value.trim();
-      m.firstFrameMovingCredits = card.querySelector('#inputFirstFrameMoving').value.trim();
-      m.cplEntries = card.querySelector('#inputCplEntries').value.trim();
-
-      showNotice(`Movie details updated in ${toolDisplayName(tool)}.`);
+      showNotice(`Trailer details updated for "${m.title}".`);
       updateAllUI();
     });
   }
@@ -2335,16 +2519,7 @@ function setupNewsletterSync() {
     activeMovie.firstFrameMovingCredits = activeMovie.first_frame_moving_credits;
     activeMovie.cplEntries = document.getElementById('nlDetailCplEntries')?.value.trim() || '';
 
-    const pMode = document.getElementById('nlDetailPosterMode')?.value || 'auto';
-    activeMovie.poster_mode = pMode;
-    activeMovie.posterMode = pMode;
-
     let posterVal = document.getElementById('nlDetailPosterUrl')?.value.trim() || '';
-
-    const tMode = document.getElementById('nlDetailTrailerMode')?.value || 'auto';
-    activeMovie.trailer_mode = tMode;
-    activeMovie.trailerMode = tMode;
-
     let trailerVal = document.getElementById('nlDetailTrailerUrl')?.value.trim() || '';
     if (trailerVal && !trailerVal.startsWith('http') && !trailerVal.startsWith('mailto:') && trailerVal.includes('@')) {
       trailerVal = `mailto:${trailerVal}`;
@@ -2390,41 +2565,6 @@ function setupNewsletterSync() {
     }
   });
 
-  // Mode Dropdown changes: auto vs manual
-  const posterModeSelect = document.getElementById('nlDetailPosterMode');
-  const btnFetchPoster = document.getElementById('btnNlFetchPoster');
-  const posterInput = document.getElementById('nlDetailPosterUrl');
-  if (posterModeSelect) {
-    posterModeSelect.addEventListener('change', () => {
-      const isManual = posterModeSelect.value === 'manual';
-      if (btnFetchPoster) btnFetchPoster.disabled = isManual;
-      if (isManual && posterInput) posterInput.focus();
-      const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
-      if (activeMovie) {
-        activeMovie.poster_mode = posterModeSelect.value;
-        activeMovie.posterMode = posterModeSelect.value;
-      }
-      syncActiveMovieFromInputs();
-    });
-  }
-
-  const trailerModeSelect = document.getElementById('nlDetailTrailerMode');
-  const btnFetchTrailer = document.getElementById('btnNlFetchTrailer');
-  const trailerInput = document.getElementById('nlDetailTrailerUrl');
-  if (trailerModeSelect) {
-    trailerModeSelect.addEventListener('change', () => {
-      const isManual = trailerModeSelect.value === 'manual';
-      if (btnFetchTrailer) btnFetchTrailer.disabled = isManual;
-      if (isManual && trailerInput) trailerInput.focus();
-      const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
-      if (activeMovie) {
-        activeMovie.trailer_mode = trailerModeSelect.value;
-        activeMovie.trailerMode = trailerModeSelect.value;
-      }
-      syncActiveMovieFromInputs();
-    });
-  }
-
   // Poster Image Upload
   setupImageUpload('btnNlUploadPoster', 'fileNlPosterInput', (dataUrl) => {
     const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
@@ -2435,11 +2575,8 @@ function setupNewsletterSync() {
     activeMovie.poster_url = dataUrl;
     activeMovie.posterUrl = dataUrl;
     activeMovie.selectedPoster = dataUrl;
-    activeMovie.poster_mode = 'manual';
-    activeMovie.posterMode = 'manual';
+    const posterInput = document.getElementById('nlDetailPosterUrl');
     if (posterInput) posterInput.value = dataUrl;
-    if (posterModeSelect) posterModeSelect.value = 'manual';
-    if (btnFetchPoster) btnFetchPoster.disabled = true;
     renderNewsletterPreview();
     saveLocalState();
     showNotice(`Poster image set for "${activeMovie.title}".`);
@@ -2457,203 +2594,6 @@ function setupNewsletterSync() {
         renderNewsletterPreview();
         saveLocalState();
       }
-    });
-  }
-
-  // Newsletter Action Buttons (Fetch, Apply Changes, Update Preview)
-  if (btnFetchPoster) {
-    btnFetchPoster.addEventListener('click', async () => {
-      const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
-      if (!activeMovie) {
-        showNotice('Please select a movie from the newsletter list first.', 'error');
-        return;
-      }
-      if (activeMovie.poster_mode === 'manual') {
-        showNotice('Poster mode is Manual. Switch to Auto to fetch from TMDB.', 'error');
-        return;
-      }
-      showNotice(`Searching TMDB poster for "${activeMovie.title}"...`);
-      try {
-        const res = await apiFetch(`/api/fetch-movie-assets?title=${encodeURIComponent(activeMovie.title)}&year=${encodeURIComponent(activeMovie.year || '')}&language=${encodeURIComponent(activeMovie.language || '')}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.poster_remote) {
-            activeMovie.poster_remote = data.poster_remote;
-            activeMovie.poster_url = data.poster_remote;
-            activeMovie.posterUrl = data.poster_remote;
-            activeMovie.selectedPoster = data.poster_remote;
-            if (data.tmdb_id) activeMovie.tmdb_id = data.tmdb_id;
-            if (posterInput) posterInput.value = data.poster_remote;
-            showNotice(`Poster found for "${activeMovie.title}".`);
-            renderNewsletterPreview();
-            saveLocalState();
-            return;
-          }
-        }
-      } catch {}
-
-      // Cross-tab fallback
-      const crossMatch = [...(state.artwork?.movies || []), ...(state.trailers?.movies || []), ...(state.newsletter?.movies || [])]
-        .find(m => m && m.title && m.title.toLowerCase().trim() === activeMovie.title.toLowerCase().trim());
-      const crossPoster = crossMatch?.selectedPoster || crossMatch?.posterUrl || crossMatch?.poster_url || crossMatch?.images?.poster?.[0]?.url;
-      if (crossPoster) {
-        activeMovie.poster_remote = crossPoster;
-        activeMovie.poster_url = crossPoster;
-        activeMovie.posterUrl = crossPoster;
-        activeMovie.selectedPoster = crossPoster;
-        if (posterInput) posterInput.value = crossPoster;
-        showNotice(`Poster found for "${activeMovie.title}".`);
-        renderNewsletterPreview();
-        saveLocalState();
-        return;
-      }
-
-      // Fallback
-      if (state.status.tmdb) {
-        await fetchMovieMetadata(activeMovie);
-        const poster = activeMovie.selectedPoster || activeMovie.posterUrl || activeMovie.images?.poster?.[0]?.url;
-        if (poster) {
-          activeMovie.poster_remote = poster;
-          activeMovie.poster_url = poster;
-          activeMovie.posterUrl = poster;
-          activeMovie.selectedPoster = poster;
-          if (posterInput) posterInput.value = poster;
-          showNotice(`Poster found for "${activeMovie.title}".`);
-          renderNewsletterPreview();
-          saveLocalState();
-          return;
-        }
-      }
-      showNotice(`No poster found for '${activeMovie.title}'. Paste a URL or click Upload.`, 'error');
-    });
-  }
-
-  if (btnFetchTrailer) {
-    btnFetchTrailer.addEventListener('click', async () => {
-      const activeMovie = state.newsletter.movies.find(item => item.uid === state.newsletter.selectedUid);
-      if (!activeMovie) {
-        showNotice('Please select a movie from the newsletter list first.', 'error');
-        return;
-      }
-      if (activeMovie.trailer_mode === 'manual') {
-        showNotice('Trailer mode is Manual. Switch to Auto to fetch trailer.', 'error');
-        return;
-      }
-      showNotice(`Searching trailer for "${activeMovie.title}"...`);
-      try {
-        const res = await apiFetch(`/api/fetch-movie-assets?title=${encodeURIComponent(activeMovie.title)}&year=${encodeURIComponent(activeMovie.year || '')}&language=${encodeURIComponent(activeMovie.language || '')}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.trailer_url) {
-            activeMovie.trailer_url = data.trailer_url;
-            activeMovie.trailerUrl = data.trailer_url;
-            activeMovie.selectedTrailer = data.trailer_url;
-            if (trailerInput) trailerInput.value = data.trailer_url;
-            showNotice(`Trailer found for "${activeMovie.title}".`);
-            renderNewsletterPreview();
-            saveLocalState();
-            return;
-          }
-        }
-      } catch {}
-
-      // Cross-tab fallback
-      const crossMatch = [...(state.trailers?.movies || []), ...(state.artwork?.movies || []), ...(state.newsletter?.movies || [])]
-        .find(m => m && m.title && m.title.toLowerCase().trim() === activeMovie.title.toLowerCase().trim());
-      const crossTrailer = crossMatch?.selectedTrailer || crossMatch?.trailerUrl || crossMatch?.trailer_url || (crossMatch?.videos && crossMatch.videos[0]?.url);
-      if (crossTrailer) {
-        activeMovie.trailer_url = crossTrailer;
-        activeMovie.trailerUrl = crossTrailer;
-        activeMovie.selectedTrailer = crossTrailer;
-        if (trailerInput) trailerInput.value = crossTrailer;
-        showNotice(`Trailer found for "${activeMovie.title}".`);
-        renderNewsletterPreview();
-        saveLocalState();
-        return;
-      }
-
-      // Fallback to YouTube official trailer search URL
-      const ytSearch = `https://www.youtube.com/results?search_query=${encodeURIComponent((activeMovie.title + ' ' + (activeMovie.year || '') + ' official trailer').trim())}`;
-      activeMovie.trailer_url = ytSearch;
-      activeMovie.trailerUrl = ytSearch;
-      activeMovie.selectedTrailer = ytSearch;
-      if (trailerInput) trailerInput.value = ytSearch;
-      showNotice(`YouTube trailer link created for "${activeMovie.title}".`);
-      renderNewsletterPreview();
-      saveLocalState();
-    });
-  }
-
-  const btnApplyChanges = document.getElementById('btnNlApplyChanges');
-  if (btnApplyChanges) {
-    btnApplyChanges.addEventListener('click', () => {
-      const newsletterData = state.newsletter;
-      if (!newsletterData || !Array.isArray(newsletterData?.movies)) {
-        showNotice('No newsletter movie list available.', 'error');
-        return;
-      }
-
-      // Sync active movie details from detail panel input controls
-      syncActiveMovieFromInputs();
-
-      // Iterate through the current movies array to commit and synchronize properties
-      newsletterData.movies.forEach(m => {
-        if (!m) return;
-        if (m.poster_url) {
-          m.posterUrl = m.poster_url;
-          m.selectedPoster = m.poster_url;
-        } else if (m.selectedPoster) {
-          m.poster_url = m.selectedPoster;
-          m.posterUrl = m.selectedPoster;
-        } else if (m.posterUrl) {
-          m.poster_url = m.posterUrl;
-          m.selectedPoster = m.posterUrl;
-        }
-
-        if (m.trailer_url) {
-          m.trailerUrl = m.trailer_url;
-          m.selectedTrailer = m.trailer_url;
-        } else if (m.selectedTrailer) {
-          m.trailer_url = m.selectedTrailer;
-          m.trailerUrl = m.selectedTrailer;
-        } else if (m.trailerUrl) {
-          m.trailer_url = m.trailerUrl;
-          m.selectedTrailer = m.trailerUrl;
-        }
-      });
-
-      renderNewsletterMovieList();
-      updateAllUI();
-
-      // Explicitly force re-render of the live preview iframe
-      const freshMovies = (state.newsletter && Array.isArray(state.newsletter?.movies)) ? state.newsletter.movies : [];
-      const freshHtml = generateNewsletterHTML(freshMovies, state.newsletter || {});
-      const iframe = document.getElementById('nlIframePreview');
-      if (iframe) {
-        iframe.srcdoc = freshHtml;
-        try {
-          const doc = iframe.contentDocument || iframe.contentWindow?.document;
-          if (doc) {
-            doc.open();
-            doc.write(freshHtml);
-            doc.close();
-          }
-        } catch (e) {
-          console.warn('Iframe doc write refresh notice:', e);
-        }
-      }
-
-      const activeMovie = newsletterData.movies.find(item => item && item.uid === newsletterData.selectedUid);
-      showNotice(`Changes applied${activeMovie ? ` for "${activeMovie.title}"` : ''}. Newsletter preview updated.`);
-    });
-  }
-
-  const btnUpdatePreview = document.getElementById('btnNlUpdatePreview');
-  if (btnUpdatePreview) {
-    btnUpdatePreview.addEventListener('click', () => {
-      syncActiveMovieFromInputs();
-      renderNewsletterPreview();
-      showNotice('Newsletter live preview refreshed.');
     });
   }
 
@@ -2898,11 +2838,7 @@ function populateNewsletterMovieDetails(m) {
   const cplEl = document.getElementById('nlDetailCplEntries');
   const incEl = document.getElementById('nlDetailInclude');
   const posterEl = document.getElementById('nlDetailPosterUrl');
-  const posterModeEl = document.getElementById('nlDetailPosterMode');
   const trailerEl = document.getElementById('nlDetailTrailerUrl');
-  const trailerModeEl = document.getElementById('nlDetailTrailerMode');
-  const btnFetchPoster = document.getElementById('btnNlFetchPoster');
-  const btnFetchTrailer = document.getElementById('btnNlFetchTrailer');
 
   if (titleEl) titleEl.value = m.title || '';
   if (yearEl) yearEl.value = m.year || '';
@@ -2919,16 +2855,10 @@ function populateNewsletterMovieDetails(m) {
     incEl.checked = m.include !== false && m.checked !== false;
   }
 
-  const posterMode = m.poster_mode || m.posterMode || 'auto';
-  if (posterModeEl) posterModeEl.value = posterMode;
-  if (btnFetchPoster) btnFetchPoster.disabled = (posterMode === 'manual');
   if (posterEl) {
     posterEl.value = m.poster_url || m.posterUrl || m.selectedPoster || m.poster_remote || m.images?.poster?.[0]?.url || '';
   }
 
-  const trailerMode = m.trailer_mode || m.trailerMode || 'auto';
-  if (trailerModeEl) trailerModeEl.value = trailerMode;
-  if (btnFetchTrailer) btnFetchTrailer.disabled = (trailerMode === 'manual');
   if (trailerEl) {
     trailerEl.value = m.trailer_url || m.trailerUrl || m.selectedTrailer || (m.videos && m.videos[0]?.url) || '';
   }
@@ -3034,18 +2964,24 @@ async function exportNewsletterHTML(embedImages = false) {
   showNotice('Newsletter HTML exported successfully.');
 }
 
-// Download Artwork ZIP strictly from artwork.movies
+// Download Artwork ZIP strictly from selected artwork.movies
 async function downloadArtworkZIP() {
   const assets = [];
-  state.artwork.movies.forEach(m => {
+  const allMovies = state.artwork?.movies || [];
+  const checkedMovies = allMovies.filter(m => m.checked !== false);
+  const moviesToExport = checkedMovies.length > 0 ? checkedMovies : allMovies;
+
+  moviesToExport.forEach(m => {
     const poster = m.posterUrl || m.selectedPoster || m.images?.poster?.[0]?.url;
-    if (poster) assets.push({ name: `${m.title}_poster`, url: poster });
+    if (poster) assets.push({ name: `${cleanFileName(m.title)}_poster`, url: poster });
     const backdrop = m.selectedBackdrop || m.images?.backdrop?.[0]?.url;
-    if (backdrop) assets.push({ name: `${m.title}_backdrop`, url: backdrop });
+    if (backdrop) assets.push({ name: `${cleanFileName(m.title)}_backdrop`, url: backdrop });
+    const logo = m.selectedLogo || m.images?.logo?.[0]?.url;
+    if (logo) assets.push({ name: `${cleanFileName(m.title)}_logo`, url: logo });
   });
 
   if (assets.length === 0) {
-    showNotice('No artwork available for ZIP export in Artwork Studio.', 'error');
+    showNotice('No artwork available for selected movies in Artwork Studio.', 'error');
     return;
   }
 
@@ -3067,19 +3003,233 @@ async function downloadArtworkZIP() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'movie-artwork.zip';
+    a.download = 'selected-movie-artwork.zip';
     a.click();
     URL.revokeObjectURL(url);
-    showNotice('Artwork ZIP downloaded.');
+    showNotice(`Downloaded selected artwork ZIP (${assets.length} image(s)).`);
   } catch (err) {
     showNotice(`ZIP Error: ${err.message}`, 'error');
   }
 }
 
-// Export CSV Report strictly for targeted tool
+// Clean file name for safe filesystem saving
+function cleanFileName(str) {
+  return (str || 'file').replace(/[/\\?%*:|"<>]/g, '_').trim();
+}
+
+// Download single file directly via blob or link
+async function downloadFileFromUrl(fileUrl, defaultFilename = 'download.jpg') {
+  showNotice(`Downloading ${defaultFilename}...`);
+  try {
+    // If it's a data URL, directly download
+    if (fileUrl.startsWith('data:')) {
+      const a = document.createElement('a');
+      a.href = fileUrl;
+      a.download = defaultFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showNotice(`Downloaded ${defaultFilename}.`);
+      return;
+    }
+
+    // Try fetching as blob to trigger direct browser save without opening new tab
+    const res = await fetch(fileUrl, { mode: 'cors' }).catch(() => null);
+    if (res && res.ok) {
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = defaultFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objUrl);
+      showNotice(`Downloaded ${defaultFilename}.`);
+      return;
+    }
+  } catch (err) {
+    console.warn('Direct blob download notice:', err);
+  }
+
+  // Fallback: direct anchor download attribute or window link
+  const a = document.createElement('a');
+  a.href = fileUrl;
+  a.download = defaultFilename;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  showNotice(`Download initiated for ${defaultFilename}.`);
+}
+
+// Download MP4 trailer video file directly via server video converter/downloader endpoint
+function downloadTrailerVideo(title, trailerUrl) {
+  if (!trailerUrl) {
+    showNotice('No trailer URL available to download.', 'error');
+    return;
+  }
+  showNotice(`Preparing MP4 trailer download for "${title}"... Please wait.`);
+  const downloadUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}`;
+  const a = document.createElement('a');
+  a.href = downloadUrl;
+  a.target = '_blank';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// Download MP4 trailer videos for all selected movies in batch
+async function downloadSelectedTrailersVideo() {
+  const allMovies = state.trailers?.movies || [];
+  const checkedMovies = allMovies.filter(m => m.checked !== false);
+  const moviesToExport = checkedMovies.length > 0 ? checkedMovies : allMovies;
+
+  const validTrailers = moviesToExport.filter(m => !!(m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url)));
+
+  if (validTrailers.length === 0) {
+    showNotice('No trailer video links found for selected movies in Trailer Studio.', 'error');
+    return;
+  }
+
+  showNotice(`Initiating MP4 video downloads for ${validTrailers.length} selected movie(s)...`);
+
+  for (let i = 0; i < validTrailers.length; i++) {
+    const m = validTrailers[i];
+    const url = m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url);
+    showNotice(`Downloading MP4 trailer video ${i + 1}/${validTrailers.length}: "${m.title}"...`);
+
+    downloadTrailerVideo(m.title, url);
+
+    if (i < validTrailers.length - 1) {
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+
+  showNotice(`Download tasks started for ${validTrailers.length} selected trailer(s).`);
+}
+
+// Download single trailer shortcut file (.url format supported across Windows/Mac/Linux)
+function downloadTrailerShortcut(title, trailerUrl) {
+  const safeTitle = cleanFileName(title);
+  const content = `[InternetShortcut]\nURL=${trailerUrl}\n`;
+  const blob = new Blob([content], { type: 'text/x-url' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${safeTitle} Trailer.url`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showNotice(`Downloaded trailer shortcut for "${title}".`);
+}
+
+// Download all posters from selected Artwork collection as a ZIP or sequential files
+async function downloadAllPosters() {
+  const allMovies = state.artwork?.movies || [];
+  const checkedMovies = allMovies.filter(m => m.checked !== false);
+  const moviesToExport = checkedMovies.length > 0 ? checkedMovies : allMovies;
+
+  const posters = moviesToExport
+    .map(m => ({
+      name: `${cleanFileName(m.title)}_poster`,
+      url: m.posterUrl || m.selectedPoster || m.poster_url || m.images?.poster?.[0]?.url
+    }))
+    .filter(p => !!p.url);
+
+  if (posters.length === 0) {
+    showNotice('No posters found for selected movies in Artwork Studio.', 'error');
+    return;
+  }
+
+  showNotice(`Downloading ${posters.length} selected poster(s)...`);
+
+  // Try creating ZIP via server endpoint
+  try {
+    const res = await fetch('/api/artwork.zip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assets: posters })
+    });
+
+    if (res.ok) {
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'selected-movie-posters.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+      showNotice(`Downloaded ${posters.length} poster(s) in selected-movie-posters.zip!`);
+      return;
+    }
+  } catch (err) {
+    console.warn('ZIP fallback to individual downloads:', err);
+  }
+
+  // Fallback: download posters individually
+  for (let i = 0; i < Math.min(posters.length, 10); i++) {
+    const p = posters[i];
+    await downloadFileFromUrl(p.url, `${p.name}.jpg`);
+  }
+}
+
+// Download trailer links collection as formatted text
+function downloadAllTrailerLinks() {
+  const allMovies = state.trailers?.movies || [];
+  const checkedMovies = allMovies.filter(m => m.checked !== false);
+  const moviesToExport = checkedMovies.length > 0 ? checkedMovies : allMovies;
+
+  const trailers = moviesToExport
+    .map(m => ({
+      title: m.title,
+      year: m.year,
+      url: m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url)
+    }))
+    .filter(t => !!t.url);
+
+  if (trailers.length === 0) {
+    showNotice('No trailer links found for selected movies in Trailer Studio.', 'error');
+    return;
+  }
+
+  // Create clean text file list + web links
+  const lines = [
+    `# ============================================================`,
+    `# QUBE MOVIE STUDIO - SELECTED TRAILER & TEASER LINKS`,
+    `# Generated: ${new Date().toLocaleString()}`,
+    `# Selected Titles: ${trailers.length}`,
+    `# ============================================================`,
+    ``
+  ];
+
+  trailers.forEach((t, i) => {
+    lines.push(`${i + 1}. ${t.title}${t.year ? ` (${t.year})` : ''}`);
+    lines.push(`   Link: ${t.url}`);
+    lines.push(``);
+  });
+
+  const textContent = lines.join('\n');
+  const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'selected-movie-trailers.txt';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showNotice(`Downloaded trailer links file for ${trailers.length} selected movie(s).`);
+}
+
+// Export CSV Report strictly for selected movies in targeted tool
 function exportCSVReport(tool = state.activeTab) {
   const targetTool = (tool === 'trailers') ? 'trailers' : 'artwork';
-  const movies = state[targetTool]?.movies || [];
+  const allMovies = state[targetTool]?.movies || [];
+  const checkedMovies = allMovies.filter(m => m.checked !== false);
+  const movies = checkedMovies.length > 0 ? checkedMovies : allMovies;
 
   if (movies.length === 0) {
     showNotice(`No movies to export in ${toolDisplayName(targetTool)}.`, 'error');
@@ -3112,10 +3262,10 @@ function exportCSVReport(tool = state.activeTab) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${targetTool}-report.csv`;
+  a.download = `selected-${targetTool}-report.csv`;
   a.click();
   URL.revokeObjectURL(url);
-  showNotice(`${toolDisplayName(targetTool)} CSV report exported.`);
+  showNotice(`${toolDisplayName(targetTool)} CSV report exported for ${movies.length} selected movie(s).`);
 }
 
 // Save Project JSON with isolated tool datasets

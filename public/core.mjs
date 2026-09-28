@@ -505,7 +505,7 @@ function parseCPLBadges(cpl) {
 }
 
 export function generateNewsletterHTML(movies, config = {}) {
-  const accentColor = config.accentColor || '#2b6ef6';
+  const accentColor = config.accentColor || '#3066be';
   const fontFamilyChoice = config.fontFamily || 'sans-serif';
   const fontStack = fontFamilyChoice === 'serif' ? 'Georgia, serif' : fontFamilyChoice === 'monospace' ? "'Courier New', monospace" : 'Inter,Arial,Helvetica,sans-serif';
   const isTwoColumn = config.layoutTemplate === 'two-column';

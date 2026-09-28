@@ -30,7 +30,7 @@ service cloud.firestore {
 
     function isValidUserProfile(data) {
       return data.keys().hasAll(['userId', 'email'])
-        && data.keys().hasOnly(['userId', 'email', 'displayName', 'photoURL', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'email', 'displayName', 'photoURL', 'createdAt', 'updatedAt', 'custom_tmdb_key', 'custom_yt_key', 'keysUpdatedAt'])
         && data.userId is string && data.userId == request.auth.uid
         && data.email is string && data.email.size() <= 256;
     }

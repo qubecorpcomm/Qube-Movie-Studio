@@ -1,5 +1,9 @@
 import http from 'node:http';
-import {readFile} from 'node:fs/promises';
+import {readFile, unlink, stat} from 'node:fs/promises';
+import {createReadStream, existsSync} from 'node:fs';
+import {spawn} from 'node:child_process';
+import path from 'node:path';
+import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {rankImages,langCode,norm,youtubeURL} from './public/core.mjs';
 
@@ -206,6 +210,100 @@ async function fetchMovieAssets(title, year, language, customTmdbKey = null, cus
   }
 
   return { poster_remote, tmdb_id, trailer_url };
+}
+
+async function downloadTrailerVideo(trailerUrl, movieTitle = 'trailer') {
+  if (!trailerUrl || typeof trailerUrl !== 'string') {
+    throw fail('Trailer URL is required.');
+  }
+
+  // Resolve yt-dlp binary location
+  const appRoot = fileURLToPath(new URL('.', import.meta.url));
+  const localYtDlp = path.join(appRoot, 'bin', 'yt-dlp');
+  const ytDlpCmd = existsSync(localYtDlp) ? localYtDlp : 'yt-dlp';
+
+  const safeTitle = (movieTitle || 'trailer')
+    .replace(/[^\p{L}\p{N}_-]/gu, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 80) || 'trailer';
+
+  const outTemplate = path.join(os.tmpdir(), `trailer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safeTitle}.%(ext)s`);
+
+  return new Promise((resolve, reject) => {
+    // Quality preference: 720p/1080p MP4 with audio merged
+    const args = [
+      '-f', 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[ext=mp4]/best',
+      '--merge-output-format', 'mp4',
+      '--no-warnings',
+      '--no-playlist',
+      '--max-filesize', '150M',
+      '-o', outTemplate,
+      trailerUrl
+    ];
+
+    const proc = spawn(ytDlpCmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+
+    proc.stderr.on('data', chunk => {
+      stderr += chunk.toString();
+    });
+
+    const timeout = setTimeout(() => {
+      proc.kill('SIGKILL');
+      reject(fail('Download timed out after 60 seconds.', 504));
+    }, 60000);
+
+    proc.on('close', async (code) => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        return reject(fail(`Video download failed: ${stderr.slice(0, 160) || 'Unknown error'}`, 502));
+      }
+
+      // Find downloaded file matching pattern
+      const expectedMp4 = outTemplate.replace('%(ext)s', 'mp4');
+      const expectedMkv = outTemplate.replace('%(ext)s', 'mkv');
+      const expectedWebm = outTemplate.replace('%(ext)s', 'webm');
+
+      let targetFile = null;
+      let ext = 'mp4';
+      let mime = 'video/mp4';
+
+      if (existsSync(expectedMp4)) {
+        targetFile = expectedMp4;
+        ext = 'mp4';
+        mime = 'video/mp4';
+      } else if (existsSync(expectedMkv)) {
+        targetFile = expectedMkv;
+        ext = 'mkv';
+        mime = 'video/x-matroska';
+      } else if (existsSync(expectedWebm)) {
+        targetFile = expectedWebm;
+        ext = 'webm';
+        mime = 'video/webm';
+      }
+
+      if (!targetFile) {
+        return reject(fail('Downloaded video file could not be located.', 500));
+      }
+
+      try {
+        const fileStats = await stat(targetFile);
+        resolve({
+          filePath: targetFile,
+          fileName: `${safeTitle}_trailer.${ext}`,
+          fileSize: fileStats.size,
+          mimeType: mime
+        });
+      } catch (statErr) {
+        reject(statErr);
+      }
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(fail(`Video download process error: ${err.message}`, 500));
+    });
+  });
 }
 
 function fallbackPdfText(buffer) {
@@ -444,6 +542,53 @@ export async function handleRequest(req, res) {
       }
       res.setHeader('Content-Disposition', 'attachment; filename="movie-artwork.zip"');
       return send(res, 200, await zip.generateAsync({ type: 'nodebuffer' }), 'application/zip');
+    }
+
+    if ((req.method === 'GET' || req.method === 'POST') && u.pathname === '/api/download-trailer') {
+      let trailerUrl = '';
+      let title = 'trailer';
+
+      if (req.method === 'POST') {
+        const b = await jsonBody(req).catch(() => ({}));
+        trailerUrl = b.url || '';
+        title = b.title || 'trailer';
+      } else {
+        trailerUrl = u.searchParams.get('url') || '';
+        title = u.searchParams.get('title') || 'trailer';
+      }
+
+      if (!trailerUrl) {
+        throw fail('Trailer URL is required.');
+      }
+
+      const media = await downloadTrailerVideo(trailerUrl, title);
+
+      res.writeHead(200, {
+        'Content-Type': media.mimeType,
+        'Content-Length': media.fileSize,
+        'Content-Disposition': `attachment; filename="${encodeURIComponent(media.fileName)}"`,
+        'Cache-Control': 'no-cache'
+      });
+
+      const stream = createReadStream(media.filePath);
+      stream.pipe(res);
+
+      stream.on('close', async () => {
+        try {
+          await unlink(media.filePath);
+        } catch {}
+      });
+
+      stream.on('error', async (err) => {
+        try {
+          await unlink(media.filePath);
+        } catch {}
+        if (!res.headersSent) {
+          send(res, 500, { error: `Failed to stream video: ${err.message}` });
+        }
+      });
+
+      return;
     }
 
     const files = {
