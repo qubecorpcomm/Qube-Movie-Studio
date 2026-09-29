@@ -369,6 +369,33 @@ async function downloadTrailerVideo(trailerUrl, movieTitle = 'trailer') {
   });
 }
 
+async function resolveDirectMp4Url(trailerUrl) {
+  try {
+    const initRes = await fetch('https://loader.to/ajax/download.php?button=1&start=1&end=1&format=720&url=' + encodeURIComponent(trailerUrl), {
+      signal: AbortSignal.timeout(9000)
+    });
+    if (!initRes.ok) return null;
+    const initData = await initRes.json();
+    if (!initData.id || !initData.progress_url) return null;
+
+    for (let attempt = 0; attempt < 22; attempt++) {
+      await new Promise(r => setTimeout(r, 1200));
+      try {
+        const pRes = await fetch(initData.progress_url, { signal: AbortSignal.timeout(6000) });
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          if (pData.download_url) {
+            return pData.download_url;
+          }
+        }
+      } catch {}
+    }
+  } catch (err) {
+    console.warn('resolveDirectMp4Url warning:', err.message);
+  }
+  return null;
+}
+
 function fallbackPdfText(buffer) {
   try {
     const str = buffer.toString('latin1');
@@ -692,26 +719,28 @@ export async function handleRequest(req, res) {
 
         return;
       } catch (err) {
-        console.warn('Trailer video download warning:', err.message);
-        // Do NOT send text/x-url or .url. Return JSON with direct MP4 downloader options so client gets real .mp4
-        const videoIdMatch = trailerUrl.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
-        const videoId = videoIdMatch ? videoIdMatch[1] : '';
-        const mp4Converters = [
-          `https://yt5s.biz/en/youtube-to-mp4/?q=${encodeURIComponent(trailerUrl)}`,
-          `https://en.savefrom.net/#url=${encodeURIComponent(trailerUrl)}`,
-          `https://10downloader.com/download?v=${encodeURIComponent(trailerUrl)}`
-        ];
+        console.warn('Local yt-dlp unavailable/blocked, attempting high-speed direct MP4 resolution...');
+      }
 
+      // 2. High-speed direct MP4 resolver
+      const directUrl = await resolveDirectMp4Url(trailerUrl);
+      if (directUrl) {
+        // If client requested direct redirect to download the file directly in browser
+        if (u.searchParams.get('redirect') === '1') {
+          res.writeHead(302, { Location: directUrl });
+          return res.end();
+        }
+
+        const safeTitle = (title || 'trailer').replace(/[/\\?%*:|"<>]/g, '_').trim() || 'trailer';
         return send(res, 200, {
-          mp4StreamAvailable: false,
-          error: err.message,
-          title,
-          trailerUrl,
-          videoId,
-          mp4DownloadUrl: mp4Converters[0],
-          converterOptions: mp4Converters
+          ok: true,
+          directMp4Url: directUrl,
+          fileName: `${safeTitle} Trailer.mp4`,
+          title
         });
       }
+
+      return send(res, 502, { error: 'Unable to resolve direct MP4 video stream. Please retry.' });
     }
 
     const files = {

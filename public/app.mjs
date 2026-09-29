@@ -1679,7 +1679,7 @@ function buildTrailerDetailCardHTML(m) {
         <button class="btn btn-secondary btn-sm" id="btnUsePastedTrailer">Use pasted link</button>
         <button class="btn btn-secondary btn-sm" id="btnSearchYouTube">Search YouTube API</button>
         ${activeTrailerUrl ? `<a href="${activeTrailerUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">Watch ↗</a>` : ''}
-        ${activeTrailerUrl ? `<button type="button" class="btn btn-primary btn-sm" id="btnDownloadSingleTrailerVideo" title="Download MP4 trailer video file">⬇ Download Trailer (MP4)</button><a href="https://yt5s.biz/en/youtube-to-mp4/?q=${encodeURIComponent(activeTrailerUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" title="Convert and download 1080p/720p MP4 directly in new tab">⬇ Convert MP4 ↗</a><button type="button" class="btn btn-secondary btn-sm" id="btnDownloadSingleTrailer" title="Download trailer link shortcut file">⬇ Link (.url)</button>` : ''}
+        ${activeTrailerUrl ? `<button type="button" class="btn btn-primary btn-sm" id="btnDownloadSingleTrailerVideo" title="Download MP4 trailer video file">⬇ Download Trailer (MP4)</button><button type="button" class="btn btn-secondary btn-sm" id="btnDownloadSingleTrailer" title="Download trailer link shortcut file">⬇ Link (.url)</button>` : ''}
       </div>
     </div>
 
@@ -3375,23 +3375,22 @@ async function downloadFileFromUrl(fileUrl, defaultFilename = 'download.jpg') {
   showNotice(`Download initiated for ${defaultFilename}.`);
 }
 
-// Download MP4 trailer video file directly via server video converter/downloader endpoint
+// Download MP4 trailer video file directly in the same window
 async function downloadTrailerVideo(title, trailerUrl) {
   if (!trailerUrl) {
     showNotice('No trailer URL available to download.', 'error');
     return;
   }
-  showNotice(`Preparing MP4 trailer download for "${title}"... Please wait.`);
+  showNotice(`Fetching direct MP4 video for "${title}"... Please wait.`);
   const downloadUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}`;
 
   try {
     const res = await fetch(downloadUrl);
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
 
-    // Check if response is actual binary video stream (MP4)
+    // 1. Direct streamed video MP4 binary
     if (res.ok && (contentType.includes('video') || contentType.includes('mp4') || contentType.includes('octet-stream'))) {
       const rawBlob = await res.blob();
-      // Enforce video/mp4 MIME type so Windows & browser strictly recognize and save as .mp4
       const videoBlob = new Blob([rawBlob], { type: 'video/mp4' });
       const objUrl = URL.createObjectURL(videoBlob);
       const a = document.createElement('a');
@@ -3405,20 +3404,33 @@ async function downloadTrailerVideo(title, trailerUrl) {
       return;
     }
 
-    // When running in serverless environments (like Vercel) or when YouTube blocks cloud datacenter IPs:
-    // Open high-speed MP4 converter preloaded with this video so the user downloads the real .mp4 video!
-    const data = await res.json().catch(() => ({}));
-    const converterUrl = data.mp4DownloadUrl || `https://yt5s.biz/en/youtube-to-mp4/?q=${encodeURIComponent(trailerUrl)}`;
-    showNotice(`Opening HD MP4 Converter for "${title}"... Choose 1080p/720p to save .mp4 video file.`);
-    const win = window.open(converterUrl, '_blank');
-    if (!win) {
-      location.href = converterUrl;
+    // 2. High-speed resolved direct MP4 URL (downloads directly in browser in same page)
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (data.directMp4Url) {
+        showNotice(`Downloading "${title} Trailer.mp4" directly...`);
+        const a = document.createElement('a');
+        a.href = data.directMp4Url;
+        a.download = data.fileName || `${cleanFileName(title)} Trailer.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        showNotice(`Download started for "${title} Trailer.mp4"!`);
+        return;
+      }
     }
+
+    // 3. Fallback: browser direct download stream through hidden frame (same window, no external site)
+    const directRedirectUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}&redirect=1`;
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = directRedirectUrl;
+    document.body.appendChild(iframe);
+    setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 30000);
+    showNotice(`Download initiated for "${title} Trailer.mp4".`);
   } catch (err) {
-    console.warn('Trailer MP4 download error, opening converter:', err);
-    const converterUrl = `https://yt5s.biz/en/youtube-to-mp4/?q=${encodeURIComponent(trailerUrl)}`;
-    showNotice(`Opening HD MP4 Converter for "${title}" to save .mp4 video file...`);
-    window.open(converterUrl, '_blank');
+    console.warn('Trailer download error:', err);
+    showNotice(`Download error: ${err.message}. Please retry.`, 'error');
   }
 }
 
