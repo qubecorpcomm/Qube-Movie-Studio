@@ -693,14 +693,24 @@ export async function handleRequest(req, res) {
         return;
       } catch (err) {
         console.warn('Trailer video download warning:', err.message);
-        // Fallback: deliver .url shortcut file so user receives the working trailer link immediately
-        const safeTitle = (title || 'trailer').replace(/[/\\?%*:|"<>]/g, '_').trim();
-        res.writeHead(200, {
-          'Content-Type': 'text/x-url',
-          'Content-Disposition': `attachment; filename="${encodeURIComponent(safeTitle)} Trailer.url"`,
-          'Cache-Control': 'no-cache'
+        // Do NOT send text/x-url or .url. Return JSON with direct MP4 downloader options so client gets real .mp4
+        const videoIdMatch = trailerUrl.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
+        const videoId = videoIdMatch ? videoIdMatch[1] : '';
+        const mp4Converters = [
+          `https://yt5s.biz/en/youtube-to-mp4/?q=${encodeURIComponent(trailerUrl)}`,
+          `https://en.savefrom.net/#url=${encodeURIComponent(trailerUrl)}`,
+          `https://10downloader.com/download?v=${encodeURIComponent(trailerUrl)}`
+        ];
+
+        return send(res, 200, {
+          mp4StreamAvailable: false,
+          error: err.message,
+          title,
+          trailerUrl,
+          videoId,
+          mp4DownloadUrl: mp4Converters[0],
+          converterOptions: mp4Converters
         });
-        return res.end(`[InternetShortcut]\nURL=${trailerUrl}\n`);
       }
     }
 
