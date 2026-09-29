@@ -220,6 +220,8 @@ export function parseMovieListText(text) {
   const createMovieRecord = (title, year = '', language = '', distributor = '') => ({
     title: title.trim(),
     year: (year || '').trim(),
+    actor: '',
+    production: (distributor || '').trim(),
     language: (language || '').trim(),
     distributor: (distributor || '').trim(),
     feature_duration: '',

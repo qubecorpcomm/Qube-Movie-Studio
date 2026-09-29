@@ -1054,8 +1054,10 @@ function addMoviesToTool(parsedList, tool = state.activeTab) {
     // Cross-reference existing poster/trailer from other tabs if not present
     let crossPoster = item.poster_url || item.poster_remote || item.posterUrl || item.selectedPoster || '';
     let crossTrailer = item.trailer_url || item.trailerUrl || item.selectedTrailer || '';
+    let crossActor = item.actor || item.cast || '';
+    let crossProduction = item.production || item.production_company || item.distributor || '';
 
-    if (!crossPoster || !crossTrailer) {
+    if (!crossPoster || !crossTrailer || !crossActor || !crossProduction) {
       const crossPool = [...(state.artwork?.movies || []), ...(state.trailers?.movies || []), ...(state.newsletter?.movies || [])];
       const match = crossPool.find(m => m && m.title && item.title && m.title.toLowerCase().trim() === item.title.toLowerCase().trim());
       if (match) {
@@ -1065,6 +1067,8 @@ function addMoviesToTool(parsedList, tool = state.activeTab) {
         if (!crossTrailer) {
           crossTrailer = match.selectedTrailer || match.trailerUrl || match.trailer_url || (match.videos && match.videos[0]?.url) || '';
         }
+        if (!crossActor && match.actor) crossActor = match.actor;
+        if (!crossProduction && (match.production || match.distributor)) crossProduction = match.production || match.distributor;
       }
     }
 
@@ -1081,8 +1085,10 @@ function addMoviesToTool(parsedList, tool = state.activeTab) {
       imdb_id: item.imdb_id || item.imdbId || null,
       title: item.title,
       year: item.year || '',
+      actor: crossActor || '',
+      production: crossProduction || item.distributor || '',
       language: item.language || '',
-      distributor: item.distributor || '',
+      distributor: crossProduction || item.distributor || '',
       poster_url: crossPoster || '',
       poster_remote: item.poster_remote || crossPoster || '',
       posterUrl: crossPoster || '',
@@ -1208,9 +1214,12 @@ function renderCollectionList() {
 
     const filtered = toolState.movies.filter(m => {
       if (!toolState.filter) return true;
-      return m.title.toLowerCase().includes(toolState.filter) ||
-             (m.year && m.year.includes(toolState.filter)) ||
-             (m.language && m.language.toLowerCase().includes(toolState.filter));
+      const q = toolState.filter.toLowerCase();
+      return (m.title && m.title.toLowerCase().includes(q)) ||
+             (m.year && String(m.year).includes(q)) ||
+             (m.language && m.language.toLowerCase().includes(q)) ||
+             (m.actor && m.actor.toLowerCase().includes(q)) ||
+             (m.production && m.production.toLowerCase().includes(q));
     });
 
     if (inputEl && inputEl.value.toLowerCase() !== toolState.filter) {
@@ -1252,13 +1261,15 @@ function renderCollectionList() {
       const posterUrl = m.posterUrl || m.selectedPoster || m.images?.poster?.[0]?.url;
       const initialLetter = m.title ? m.title.charAt(0).toUpperCase() : 'M';
       const statusClass = m.status === 'found' ? 'found' : m.status === 'loading' ? 'loading' : m.status === 'error' ? 'error' : '';
+      const metaParts = [m.year, m.language, m.actor, m.production].filter(Boolean);
+      const metaText = metaParts.length > 0 ? metaParts.join(' · ') : 'Details to discover';
 
       row.innerHTML = `
         <input type="checkbox" class="movie-checkbox" ${m.checked !== false ? 'checked' : ''} aria-label="Include ${m.title}" />
         ${posterUrl ? `<img src="${posterUrl}" class="movie-poster-img" alt="${m.title}" />` : `<div class="movie-poster-thumb">${initialLetter}</div>`}
         <div class="movie-info-block">
           <div class="movie-row-title">${m.title}</div>
-          <div class="movie-row-meta">${[m.year, m.language].filter(Boolean).join(' · ') || 'Details to discover'}</div>
+          <div class="movie-row-meta" title="${escapeHTML(metaText)}">${escapeHTML(metaText)}</div>
         </div>
         <div class="status-pill-small ${statusClass}">${m.statusText || 'Pending'}</div>
       `;
@@ -1388,6 +1399,42 @@ function buildArtworkDetailCardHTML(m) {
       </div>
     </div>
 
+    <!-- SEARCH BOX FOR POSTER -->
+    <div class="search-box-card" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
+        <span style="font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--primary-green);">
+          🔍 Search &amp; Find Posters
+        </span>
+        <span style="font-size: 11px; color: var(--text-muted);">Refine by title, year, actor &amp; production</span>
+      </div>
+
+      <div class="form-grid-2col" style="gap: 10px; margin-bottom: 12px;">
+        <div class="form-group full-width">
+          <label class="form-label" for="searchMovieTitle" style="font-size: 11px;">Movie title / Search query</label>
+          <input type="text" id="searchMovieTitle" class="form-input" value="${escapeHTML(m.title)}" placeholder="Enter movie title...">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="searchMovieYear" style="font-size: 11px;">Year</label>
+          <input type="text" id="searchMovieYear" class="form-input" value="${escapeHTML(m.year || '')}" placeholder="e.g. 2026">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="searchMovieActor" style="font-size: 11px;">Actor</label>
+          <input type="text" id="searchMovieActor" class="form-input" value="${escapeHTML(m.actor || '')}" placeholder="e.g. Shah Rukh Khan, Vijay...">
+        </div>
+
+        <div class="form-group full-width">
+          <label class="form-label" for="searchMovieProduction" style="font-size: 11px;">Production name</label>
+          <input type="text" id="searchMovieProduction" class="form-input" value="${escapeHTML(m.production || m.distributor || '')}" placeholder="e.g. Red Chillies, Marvel Studios, Sun Pictures...">
+        </div>
+      </div>
+
+      <button type="button" class="btn btn-primary btn-full" id="btnSearchArtworkBox">
+        🔍 Search Poster &amp; Artwork
+      </button>
+    </div>
+
     ${m.tmdbCandidates && m.tmdbCandidates.length > 0 ? `
       <div class="form-group" style="margin-bottom: 12px;">
         <label class="form-label" for="selectMovieMatch">Movie match</label>
@@ -1507,6 +1554,42 @@ function buildTrailerDetailCardHTML(m) {
       </div>
     </div>
 
+    <!-- SEARCH BOX FOR TRAILER -->
+    <div class="search-box-card" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
+        <span style="font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--primary-green);">
+          🔍 Search &amp; Find Trailers
+        </span>
+        <span style="font-size: 11px; color: var(--text-muted);">Refine by title, year, actor &amp; production</span>
+      </div>
+
+      <div class="form-grid-2col" style="gap: 10px; margin-bottom: 12px;">
+        <div class="form-group full-width">
+          <label class="form-label" for="searchMovieTitle" style="font-size: 11px;">Movie title / Search query</label>
+          <input type="text" id="searchMovieTitle" class="form-input" value="${escapeHTML(m.title)}" placeholder="Enter movie title...">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="searchMovieYear" style="font-size: 11px;">Year</label>
+          <input type="text" id="searchMovieYear" class="form-input" value="${escapeHTML(m.year || '')}" placeholder="e.g. 2026">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="searchMovieActor" style="font-size: 11px;">Actor</label>
+          <input type="text" id="searchMovieActor" class="form-input" value="${escapeHTML(m.actor || '')}" placeholder="e.g. Shah Rukh Khan, Vijay...">
+        </div>
+
+        <div class="form-group full-width">
+          <label class="form-label" for="searchMovieProduction" style="font-size: 11px;">Production name</label>
+          <input type="text" id="searchMovieProduction" class="form-input" value="${escapeHTML(m.production || m.distributor || '')}" placeholder="e.g. Red Chillies, Marvel Studios, Sun Pictures...">
+        </div>
+      </div>
+
+      <button type="button" class="btn btn-primary btn-full" id="btnSearchTrailerBox">
+        🔍 Search Trailer &amp; Teasers
+      </button>
+    </div>
+
     ${m.tmdbCandidates && m.tmdbCandidates.length > 0 ? `
       <div class="form-group" style="margin-bottom: 12px;">
         <label class="form-label" for="selectMovieMatch">Movie match</label>
@@ -1571,9 +1654,45 @@ function bindArtworkDetailCardEvents(card, m) {
   if (btnDown) btnDown.addEventListener('click', () => moveMovieOrder(m.uid, 1, 'artwork'));
   if (btnRemove) btnRemove.addEventListener('click', () => promptRemoveMovie(m, 'artwork'));
 
-  // Search single
+  // Search single & Search box trigger
+  const triggerArtworkSearch = () => {
+    const tVal = card.querySelector('#searchMovieTitle')?.value?.trim();
+    const yVal = card.querySelector('#searchMovieYear')?.value?.trim();
+    const aVal = card.querySelector('#searchMovieActor')?.value?.trim();
+    const pVal = card.querySelector('#searchMovieProduction')?.value?.trim();
+
+    if (tVal) m.title = tVal;
+    m.year = yVal || '';
+    m.actor = aVal || '';
+    m.production = pVal || '';
+
+    fetchMovieMetadata(m);
+  };
+
+  const btnSearchArtworkBox = card.querySelector('#btnSearchArtworkBox');
+  if (btnSearchArtworkBox) btnSearchArtworkBox.addEventListener('click', triggerArtworkSearch);
+
   const btnSearchSingle = card.querySelector('#btnSearchSingle');
-  if (btnSearchSingle) btnSearchSingle.addEventListener('click', () => fetchMovieMetadata(m));
+  if (btnSearchSingle) btnSearchSingle.addEventListener('click', triggerArtworkSearch);
+
+  // Search box Enter key and live input sync
+  ['#searchMovieTitle', '#searchMovieYear', '#searchMovieActor', '#searchMovieProduction'].forEach(sel => {
+    const inp = card.querySelector(sel);
+    if (inp) {
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          triggerArtworkSearch();
+        }
+      });
+      inp.addEventListener('change', () => {
+        if (sel === '#searchMovieTitle') m.title = inp.value.trim() || m.title;
+        else if (sel === '#searchMovieYear') m.year = inp.value.trim();
+        else if (sel === '#searchMovieActor') m.actor = inp.value.trim();
+        else if (sel === '#searchMovieProduction') m.production = inp.value.trim();
+      });
+    }
+  });
 
   // Match select
   const selectMatch = card.querySelector('#selectMovieMatch');
@@ -1691,9 +1810,68 @@ function bindTrailerDetailCardEvents(card, m) {
   if (btnDown) btnDown.addEventListener('click', () => moveMovieOrder(m.uid, 1, 'trailers'));
   if (btnRemove) btnRemove.addEventListener('click', () => promptRemoveMovie(m, 'trailers'));
 
-  // Search single
+  // Search single & Search box trigger
+  const triggerTrailerSearch = async () => {
+    const tVal = card.querySelector('#searchMovieTitle')?.value?.trim();
+    const yVal = card.querySelector('#searchMovieYear')?.value?.trim();
+    const aVal = card.querySelector('#searchMovieActor')?.value?.trim();
+    const pVal = card.querySelector('#searchMovieProduction')?.value?.trim();
+
+    if (tVal) m.title = tVal;
+    m.year = yVal || '';
+    m.actor = aVal || '';
+    m.production = pVal || '';
+
+    // Search TMDB metadata & trailers
+    await fetchMovieMetadata(m);
+
+    // Also search YouTube with enriched title + year + actor + production
+    const ytKey = (localStorage.getItem('user_youtube_api_key') || '').trim();
+    if (state.status.youtube || ytKey) {
+      try {
+        const fullQ = [m.title, m.year, m.actor, m.production].filter(Boolean).join(' ');
+        const res = await apiFetch(`/api/youtube?q=${encodeURIComponent(fullQ)}&year=${encodeURIComponent(m.year || '')}&actor=${encodeURIComponent(m.actor || '')}&production=${encodeURIComponent(m.production || '')}`);
+        const data = await res.json();
+        if (data.videos && data.videos.length > 0) {
+          m.videos = m.videos || [];
+          const existingUrls = new Set(m.videos.map(v => v.url));
+          const newVids = data.videos.filter(v => !existingUrls.has(v.url));
+          m.videos.unshift(...newVids);
+          if (!m.keepTrailer && newVids.length > 0) {
+            m.selectedTrailer = newVids[0].url;
+            m.trailerUrl = newVids[0].url;
+            m.trailer_url = newVids[0].url;
+          }
+          updateAllUI();
+        }
+      } catch {}
+    }
+  };
+
+  const btnSearchTrailerBox = card.querySelector('#btnSearchTrailerBox');
+  if (btnSearchTrailerBox) btnSearchTrailerBox.addEventListener('click', triggerTrailerSearch);
+
   const btnSearchSingle = card.querySelector('#btnSearchSingle');
-  if (btnSearchSingle) btnSearchSingle.addEventListener('click', () => fetchMovieMetadata(m));
+  if (btnSearchSingle) btnSearchSingle.addEventListener('click', triggerTrailerSearch);
+
+  // Search box Enter key and live input sync
+  ['#searchMovieTitle', '#searchMovieYear', '#searchMovieActor', '#searchMovieProduction'].forEach(sel => {
+    const inp = card.querySelector(sel);
+    if (inp) {
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          triggerTrailerSearch();
+        }
+      });
+      inp.addEventListener('change', () => {
+        if (sel === '#searchMovieTitle') m.title = inp.value.trim() || m.title;
+        else if (sel === '#searchMovieYear') m.year = inp.value.trim();
+        else if (sel === '#searchMovieActor') m.actor = inp.value.trim();
+        else if (sel === '#searchMovieProduction') m.production = inp.value.trim();
+      });
+    }
+  });
 
   // Match select
   const selectMatch = card.querySelector('#selectMovieMatch');
@@ -1747,9 +1925,10 @@ function bindTrailerDetailCardEvents(card, m) {
         showNotice('YouTube API key is missing. Set key in Connection Details to search.', 'error');
         return;
       }
-      showNotice(`Searching YouTube for ${m.title}...`);
+      const fullQ = [m.title, m.year, m.actor, m.production].filter(Boolean).join(' ');
+      showNotice(`Searching YouTube for ${fullQ}...`);
       try {
-        const res = await apiFetch(`/api/youtube?q=${encodeURIComponent(m.title)}`);
+        const res = await apiFetch(`/api/youtube?q=${encodeURIComponent(fullQ)}&year=${encodeURIComponent(m.year || '')}&actor=${encodeURIComponent(m.actor || '')}&production=${encodeURIComponent(m.production || '')}`);
         const data = await res.json();
         if (data.videos && data.videos.length > 0) {
           m.videos = m.videos || [];
@@ -1834,7 +2013,7 @@ async function fetchMovieMetadata(m) {
   try {
     let searchData = null;
     try {
-      const searchUrl = `/api/search?q=${encodeURIComponent(m.title)}${m.year ? `&year=${m.year}` : ''}${m.language ? `&language=${m.language}` : ''}`;
+      const searchUrl = `/api/search?q=${encodeURIComponent(m.title)}${m.year ? `&year=${encodeURIComponent(m.year)}` : ''}${m.language ? `&language=${encodeURIComponent(m.language)}` : ''}${m.actor ? `&actor=${encodeURIComponent(m.actor)}` : ''}${m.production ? `&production=${encodeURIComponent(m.production)}` : ''}`;
       const searchRes = await apiFetch(searchUrl);
       if (searchRes.ok) searchData = await searchRes.json();
     } catch {}
@@ -1930,6 +2109,9 @@ async function loadMovieDetailFromTMDB(m, tmdbId) {
     m.id = data.movie.id;
     m.imdb_id = data.movie.imdb_id;
     m.overview = data.movie.overview || m.overview || '';
+    if (!m.year && data.movie.year) m.year = data.movie.year;
+    if (!m.actor && data.movie.actor) m.actor = data.movie.actor;
+    if (!m.production && data.movie.production) m.production = data.movie.production;
     m.images = data.images || { poster: [], backdrop: [], logo: [] };
     m.videos = data.videos || [];
 
@@ -3236,7 +3418,7 @@ function exportCSVReport(tool = state.activeTab) {
     return;
   }
 
-  const headers = ['Title', 'Year', 'Language', 'Distributor', 'Poster URL', 'Trailer URL', 'Feature Duration', 'CPL Part 1 Duration', 'CPL Part 2 Duration', 'Synopsis'];
+  const headers = ['Title', 'Year', 'Actor', 'Production', 'Language', 'Distributor', 'Poster URL', 'Trailer URL', 'Feature Duration', 'CPL Part 1 Duration', 'CPL Part 2 Duration', 'Synopsis'];
   const rows = [headers.join(',')];
 
   movies.forEach(m => {
@@ -3245,6 +3427,8 @@ function exportCSVReport(tool = state.activeTab) {
     const row = [
       escapeCSV(m.title),
       escapeCSV(m.year),
+      escapeCSV(m.actor || ''),
+      escapeCSV(m.production || m.distributor || ''),
       escapeCSV(m.language),
       escapeCSV(m.distributor),
       escapeCSV(poster),

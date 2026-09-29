@@ -28,7 +28,12 @@ function tmdb(path, params = {}, customApiKey = null) {
   return api(u);
 }
 async function search(u, customApiKey = null) {
-  const title = (u.searchParams.get('q') || '').slice(0, 180), year = u.searchParams.get('year') || '', hint = langCode(u.searchParams.get('language')), imdb = title.match(/tt\d{7,10}/)?.[0];
+  const title = (u.searchParams.get('q') || '').slice(0, 180),
+        year = u.searchParams.get('year') || '',
+        actor = (u.searchParams.get('actor') || '').trim(),
+        production = (u.searchParams.get('production') || '').trim(),
+        hint = langCode(u.searchParams.get('language')),
+        imdb = title.match(/tt\d{7,10}/)?.[0];
   if (!title.trim()) throw fail('Enter a movie title.');
   let results;
   if (imdb) results = (await tmdb('/find/' + imdb, { external_source: 'imdb_id' }, customApiKey)).movie_results || [];
@@ -49,6 +54,20 @@ async function search(u, customApiKey = null) {
         if (!results.length && year) results = (await tmdb('/search/movie', { query: primary, include_adult: 'false' }, customApiKey)).results || [];
       }
     }
+    // If actor is provided and no results yet, try finding person to see known_for
+    if (!results.length && actor) {
+      try {
+        const personData = await tmdb('/search/person', { query: actor, include_adult: 'false' }, customApiKey);
+        const person = personData.results?.[0];
+        if (person && Array.isArray(person.known_for)) {
+          const matched = person.known_for.filter(kf => {
+            const kfTitle = kf.title || kf.name || '';
+            return norm(kfTitle).includes(norm(title)) || norm(title).includes(norm(kfTitle));
+          });
+          if (matched.length) results = matched;
+        }
+      } catch {}
+    }
     if (!results.length) {
       try {
         const multi = (await tmdb('/search/multi', { query: title, include_adult: 'false' }, customApiKey)).results || [];
@@ -60,11 +79,15 @@ async function search(u, customApiKey = null) {
       } catch {}
     }
   }
-  const score = (m, i) => 20 - i * 3 + ([m.title, m.original_title].some(t => norm(t) === norm(title)) ? 50 : 0) + (year && m.release_date?.startsWith(year) ? 30 : 0) + (hint && hint === m.original_language ? 25 : 0);
+  const score = (m, i) => 20 - i * 3 +
+    ([m.title, m.original_title].some(t => norm(t) === norm(title)) ? 50 : 0) +
+    (year && m.release_date?.startsWith(year) ? 30 : 0) +
+    (hint && hint === m.original_language ? 25 : 0) +
+    (actor && (m.overview || '').toLowerCase().includes(actor.toLowerCase()) ? 20 : 0);
   return results.slice(0, 12).map((m, i) => ({ ...m, score: score(m, i) })).sort((a, b) => b.score - a.score);
 }
 async function detail(id, language, customApiKey = null) {
-  const m = await tmdb('/movie/' + id, { append_to_response: 'images,videos', include_image_language: [langCode(language), 'en', 'null'].filter(Boolean).join(',') }, customApiKey);
+  const m = await tmdb('/movie/' + id, { append_to_response: 'images,videos,credits', include_image_language: [langCode(language), 'en', 'null'].filter(Boolean).join(',') }, customApiKey);
   const target = langCode(language) || m.original_language;
   // Fetch all image/video languages; rank original language ahead of fallbacks.
   const [images, videos] = await Promise.all([
@@ -75,8 +98,19 @@ async function detail(id, language, customApiKey = null) {
   const seen = new Set();
   all = all.filter(v => v.site === 'YouTube' && ['Trailer', 'Teaser'].includes(v.type) && !seen.has(v.key) && seen.add(v.key));
   all = all.map(v => ({ ...v, url: youtubeURL(v.key), score: (v.iso_639_1 === target ? 100 : 0) + (v.official ? 25 : 0) + (v.type === 'Trailer' ? 10 : 0) })).filter(v => v.url).sort((a, b) => b.score - a.score);
+  const topCast = (m.credits?.cast || []).slice(0, 5).map(c => c.name).join(', ');
+  const topProduction = (m.production_companies || []).slice(0, 3).map(p => p.name).join(', ');
   return {
-    movie: { id: m.id, title: m.title, year: m.release_date?.slice(0, 4) || '', original_language: m.original_language, imdb_id: m.imdb_id, overview: m.overview },
+    movie: {
+      id: m.id,
+      title: m.title,
+      year: m.release_date?.slice(0, 4) || '',
+      original_language: m.original_language,
+      imdb_id: m.imdb_id,
+      overview: m.overview,
+      actor: topCast,
+      production: topProduction
+    },
     images: { poster: rankImages(images.posters || [], 'poster', target, m.original_language), backdrop: rankImages(images.backdrops || [], 'backdrop', target, m.original_language), logo: rankImages(images.logos || [], 'logo', target, m.original_language) },
     videos: all
   };
@@ -494,11 +528,16 @@ export async function handleRequest(req, res) {
     if (req.method === 'GET' && u.pathname === '/api/youtube') {
       if (youtubeQuotaExceeded) throw fail('YouTube API quota reached for this session. Use manual trailer links.', 403);
       if (!effectiveYtKey) throw fail('Optional YouTube search needs YOUTUBE_API_KEY.', 503);
-      const q = (u.searchParams.get('q') || '').trim().toLowerCase().slice(0, 200);
+      const q = (u.searchParams.get('q') || '').trim().slice(0, 200);
+      const year = (u.searchParams.get('year') || '').trim();
+      const actor = (u.searchParams.get('actor') || '').trim();
+      const production = (u.searchParams.get('production') || '').trim();
       if (!q) throw fail('Enter a search title.');
-      if (youtubeCache.has(q)) return send(res, 200, { videos: youtubeCache.get(q) });
+      const fullQuery = [q, year, actor, production, 'official trailer'].filter(Boolean).join(' ');
+      const cacheKey = fullQuery.toLowerCase();
+      if (youtubeCache.has(cacheKey)) return send(res, 200, { videos: youtubeCache.get(cacheKey) });
       const url = new URL('https://www.googleapis.com/youtube/v3/search');
-      url.search = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '6', q: q + ' official trailer', key: effectiveYtKey });
+      url.search = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '6', q: fullQuery, key: effectiveYtKey });
       try {
         const d = await api(url);
         const videos = (d.items || []).map(v => ({ name: v.snippet.title, url: youtubeURL(v.id.videoId), type: 'YouTube search', iso_639_1: '' }));
