@@ -1428,6 +1428,24 @@ function buildArtworkDetailCardHTML(m) {
           <label class="form-label" for="searchMovieProduction" style="font-size: 11px;">Production name</label>
           <input type="text" id="searchMovieProduction" class="form-input" value="${escapeHTML(m.production || m.distributor || '')}" placeholder="e.g. Red Chillies, Marvel Studios, Sun Pictures...">
         </div>
+
+        <div class="form-group full-width" style="margin-top: 2px;">
+          <label class="form-label" style="font-size: 11px; display:flex; justify-content:space-between;">
+            <span>Language</span>
+            <span style="font-weight:normal; color:var(--text-muted);">${m.language || 'Auto / Original'}</span>
+          </label>
+          <div class="quick-lang-buttons" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+            ${['Auto', 'Tamil', 'Telugu', 'Hindi', 'Malayalam', 'Kannada', 'English'].map(lang => {
+              const isAuto = lang === 'Auto';
+              const isSelected = isAuto ? !m.language : (m.language && langCode(lang) === langCode(m.language));
+              return `<button type="button" class="btn btn-sm btn-quick-lang ${isSelected ? 'btn-primary' : 'btn-secondary'}" data-lang="${isAuto ? '' : lang}" style="padding: 3px 10px; font-size: 11px; border-radius: 4px;">${lang}</button>`;
+            }).join('')}
+          </div>
+          <select id="selectArtworkSearchLang" class="form-select form-select-sm">
+            <option value="">Automatic / Original language</option>
+            ${languages.map(l => `<option value="${l}" ${langCode(l) === langCode(m.language) ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+        </div>
       </div>
 
       <button type="button" class="btn btn-primary btn-full" id="btnSearchArtworkBox">
@@ -1526,9 +1544,11 @@ function buildTrailerDetailCardHTML(m) {
     <option value="${c.id}" ${c.id === m.id ? 'selected' : ''}>${escapeHTML(c.title)} (${c.release_date ? c.release_date.slice(0, 4) : 'N/A'}) · ${c.original_language || 'en'}</option>
   `).join('');
 
-  const trailerSelectOpts = (m.videos || []).map(v => `
-    <option value="${v.url}" ${v.url === (m.trailerUrl || m.selectedTrailer) ? 'selected' : ''}>${escapeHTML(v.name)} · ${v.type} (${v.iso_639_1 || 'en'})</option>
-  `).join('');
+  const trailerSelectOpts = (m.videos || []).map(v => {
+    const cat = v.category || v.type || 'Video';
+    const icon = cat === 'Trailer' ? '🎬' : cat === 'Teaser' ? '🔥' : cat === 'Song' ? '🎵' : cat === 'Promo' ? '⚡' : '▶';
+    return `<option value="${v.url}" data-category="${cat}" ${v.url === (m.trailerUrl || m.selectedTrailer) ? 'selected' : ''}>${icon} [${cat}] ${escapeHTML(v.name)} (${v.iso_639_1 || 'orig'})</option>`;
+  }).join('');
 
   const activeTrailerUrl = m.trailerUrl || m.selectedTrailer || m.videos?.[0]?.url || '';
   const youtubeVideoId = extractYouTubeID(activeTrailerUrl);
@@ -1554,11 +1574,11 @@ function buildTrailerDetailCardHTML(m) {
       </div>
     </div>
 
-    <!-- SEARCH BOX FOR TRAILER -->
+    <!-- SEARCH BOX FOR TRAILER, TEASER, SONGS, PROMOS -->
     <div class="search-box-card" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 16px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
         <span style="font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--primary-green);">
-          🔍 Search &amp; Find Trailers
+          🔍 Find Trailers, Teasers, Songs &amp; Promos
         </span>
         <span style="font-size: 11px; color: var(--text-muted);">Refine by title, year, actor &amp; production</span>
       </div>
@@ -1583,11 +1603,44 @@ function buildTrailerDetailCardHTML(m) {
           <label class="form-label" for="searchMovieProduction" style="font-size: 11px;">Production name</label>
           <input type="text" id="searchMovieProduction" class="form-input" value="${escapeHTML(m.production || m.distributor || '')}" placeholder="e.g. Red Chillies, Marvel Studios, Sun Pictures...">
         </div>
+
+        <div class="form-group full-width" style="margin-top: 2px;">
+          <label class="form-label" style="font-size: 11px; display:flex; justify-content:space-between;">
+            <span>Language</span>
+            <span style="font-weight:normal; color:var(--text-muted);">${m.language || 'Auto / Original'}</span>
+          </label>
+          <div class="quick-lang-buttons" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+            ${['Auto', 'Tamil', 'Telugu', 'Hindi', 'Malayalam', 'Kannada', 'English'].map(lang => {
+              const isAuto = lang === 'Auto';
+              const isSelected = isAuto ? !m.language : (m.language && langCode(lang) === langCode(m.language));
+              return `<button type="button" class="btn btn-sm btn-quick-lang ${isSelected ? 'btn-primary' : 'btn-secondary'}" data-lang="${isAuto ? '' : lang}" style="padding: 3px 10px; font-size: 11px; border-radius: 4px;">${lang}</button>`;
+            }).join('')}
+          </div>
+          <select id="selectTrailerSearchLang" class="form-select form-select-sm">
+            <option value="">Automatic / Original language</option>
+            ${languages.map(l => `<option value="${l}" ${langCode(l) === langCode(m.language) ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+        </div>
       </div>
 
-      <button type="button" class="btn btn-primary btn-full" id="btnSearchTrailerBox">
-        🔍 Search Trailer &amp; Teasers
-      </button>
+      <!-- ASSET CATEGORY FIND BUTTONS -->
+      <div style="display:flex; flex-wrap:wrap; gap:6px;">
+        <button type="button" class="btn btn-primary btn-sm btn-find-media" data-category="all" id="btnSearchAllMedia" style="flex:1; min-width:125px;">
+          🔍 All Videos
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm btn-find-media" data-category="trailer" id="btnSearchTrailerOnly" style="flex:1; min-width:110px;">
+          🎬 Trailers
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm btn-find-media" data-category="teaser" id="btnSearchTeaserOnly" style="flex:1; min-width:105px;">
+          🔥 Teasers
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm btn-find-media" data-category="song" id="btnSearchSongOnly" style="flex:1; min-width:100px;">
+          🎵 Songs
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm btn-find-media" data-category="promo" id="btnSearchPromoOnly" style="flex:1; min-width:105px;">
+          ⚡ Promos
+        </button>
+      </div>
     </div>
 
     ${m.tmdbCandidates && m.tmdbCandidates.length > 0 ? `
@@ -1597,18 +1650,19 @@ function buildTrailerDetailCardHTML(m) {
       </div>
     ` : ''}
 
-    <div class="form-group" style="margin-bottom: 16px;">
-      <label class="form-label" for="selectLanguage">Preferred trailer language</label>
-      <select id="selectLanguage" class="form-select">
-        <option value="">Automatic / original</option>
-        ${languages.map(l => `<option value="${l}" ${langCode(l) === langCode(m.language) ? 'selected' : ''}>${l}</option>`).join('')}
-      </select>
-    </div>
-
-    <!-- TRAILER & VIDEO DISCOVERY -->
+    <!-- TRAILER & VIDEO DISCOVERY WITH CATEGORIES -->
     <div class="form-group full-width" style="margin-bottom: 12px;">
-      <label class="form-label" for="selectTrailer">Video alternatives (Trailers / Teasers / Clips)</label>
-      <select id="selectTrailer" class="form-select">${trailerSelectOpts || '<option value="">No trailers found</option>'}</select>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom: 8px;">
+        <label class="form-label" for="selectTrailer" style="margin-bottom:0;">Video Alternatives (Trailers, Teasers, Songs, Promos)</label>
+        <div class="video-cat-pills" style="display:flex; flex-wrap:wrap; gap:4px;">
+          <button type="button" class="btn btn-sm btn-video-filter active" data-cat="all" style="padding:2px 7px; font-size:10px;">All (${(m.videos || []).length})</button>
+          <button type="button" class="btn btn-sm btn-video-filter" data-cat="Trailer" style="padding:2px 7px; font-size:10px;">🎬 Trailers (${(m.videos || []).filter(v => (v.category || v.type) === 'Trailer').length})</button>
+          <button type="button" class="btn btn-sm btn-video-filter" data-cat="Teaser" style="padding:2px 7px; font-size:10px;">🔥 Teasers (${(m.videos || []).filter(v => (v.category || v.type) === 'Teaser').length})</button>
+          <button type="button" class="btn btn-sm btn-video-filter" data-cat="Song" style="padding:2px 7px; font-size:10px;">🎵 Songs (${(m.videos || []).filter(v => (v.category || v.type) === 'Song').length})</button>
+          <button type="button" class="btn btn-sm btn-video-filter" data-cat="Promo" style="padding:2px 7px; font-size:10px;">⚡ Promos (${(m.videos || []).filter(v => (v.category || v.type) === 'Promo').length})</button>
+        </div>
+      </div>
+      <select id="selectTrailer" class="form-select">${trailerSelectOpts || '<option value="">No videos found</option>'}</select>
     </div>
 
     <div class="form-group full-width" style="margin-bottom: 12px;">
@@ -1674,6 +1728,23 @@ function bindArtworkDetailCardEvents(card, m) {
 
   const btnSearchSingle = card.querySelector('#btnSearchSingle');
   if (btnSearchSingle) btnSearchSingle.addEventListener('click', triggerArtworkSearch);
+
+  // Language buttons in Artwork Search Box
+  card.querySelectorAll('.quick-lang-buttons .btn-quick-lang').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      m.language = btn.dataset.lang || '';
+      triggerArtworkSearch();
+    });
+  });
+
+  const selArtworkLang = card.querySelector('#selectArtworkSearchLang');
+  if (selArtworkLang) {
+    selArtworkLang.addEventListener('change', (e) => {
+      m.language = e.target.value;
+      triggerArtworkSearch();
+    });
+  }
 
   // Search box Enter key and live input sync
   ['#searchMovieTitle', '#searchMovieYear', '#searchMovieActor', '#searchMovieProduction'].forEach(sel => {
@@ -1810,8 +1881,8 @@ function bindTrailerDetailCardEvents(card, m) {
   if (btnDown) btnDown.addEventListener('click', () => moveMovieOrder(m.uid, 1, 'trailers'));
   if (btnRemove) btnRemove.addEventListener('click', () => promptRemoveMovie(m, 'trailers'));
 
-  // Search single & Search box trigger
-  const triggerTrailerSearch = async () => {
+  // Search single & Search box trigger with media category (all, trailer, teaser, song, promo)
+  const triggerTrailerSearch = async (mediaCategory = 'all') => {
     const tVal = card.querySelector('#searchMovieTitle')?.value?.trim();
     const yVal = card.querySelector('#searchMovieYear')?.value?.trim();
     const aVal = card.querySelector('#searchMovieActor')?.value?.trim();
@@ -1822,15 +1893,17 @@ function bindTrailerDetailCardEvents(card, m) {
     m.actor = aVal || '';
     m.production = pVal || '';
 
-    // Search TMDB metadata & trailers
+    // Search TMDB metadata & videos
     await fetchMovieMetadata(m);
 
-    // Also search YouTube with enriched title + year + actor + production
+    // Also search YouTube with enriched title + year + actor + production + category
     const ytKey = (localStorage.getItem('user_youtube_api_key') || '').trim();
     if (state.status.youtube || ytKey) {
       try {
         const fullQ = [m.title, m.year, m.actor, m.production].filter(Boolean).join(' ');
-        const res = await apiFetch(`/api/youtube?q=${encodeURIComponent(fullQ)}&year=${encodeURIComponent(m.year || '')}&actor=${encodeURIComponent(m.actor || '')}&production=${encodeURIComponent(m.production || '')}`);
+        const catParam = mediaCategory ? `&category=${encodeURIComponent(mediaCategory)}` : '';
+        const langParam = m.language ? `&language=${encodeURIComponent(m.language)}` : '';
+        const res = await apiFetch(`/api/youtube?q=${encodeURIComponent(fullQ)}&year=${encodeURIComponent(m.year || '')}&actor=${encodeURIComponent(m.actor || '')}&production=${encodeURIComponent(m.production || '')}${catParam}${langParam}`);
         const data = await res.json();
         if (data.videos && data.videos.length > 0) {
           m.videos = m.videos || [];
@@ -1842,6 +1915,7 @@ function bindTrailerDetailCardEvents(card, m) {
             m.trailerUrl = newVids[0].url;
             m.trailer_url = newVids[0].url;
           }
+          showNotice(`Found ${newVids.length} new ${mediaCategory === 'all' ? 'video' : mediaCategory}(s)!`);
           updateAllUI();
         }
       } catch {}
@@ -1849,10 +1923,65 @@ function bindTrailerDetailCardEvents(card, m) {
   };
 
   const btnSearchTrailerBox = card.querySelector('#btnSearchTrailerBox');
-  if (btnSearchTrailerBox) btnSearchTrailerBox.addEventListener('click', triggerTrailerSearch);
+  if (btnSearchTrailerBox) btnSearchTrailerBox.addEventListener('click', () => triggerTrailerSearch('all'));
 
   const btnSearchSingle = card.querySelector('#btnSearchSingle');
-  if (btnSearchSingle) btnSearchSingle.addEventListener('click', triggerTrailerSearch);
+  if (btnSearchSingle) btnSearchSingle.addEventListener('click', () => triggerTrailerSearch('all'));
+
+  // Find media buttons (All, Trailers, Teasers, Songs, Promos)
+  card.querySelectorAll('.btn-find-media').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cat = btn.dataset.category || 'all';
+      triggerTrailerSearch(cat);
+    });
+  });
+
+  // Language buttons in Trailer Search Box
+  card.querySelectorAll('.quick-lang-buttons .btn-quick-lang').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      m.language = btn.dataset.lang || '';
+      triggerTrailerSearch('all');
+    });
+  });
+
+  const selTrailerLang = card.querySelector('#selectTrailerSearchLang');
+  if (selTrailerLang) {
+    selTrailerLang.addEventListener('change', (e) => {
+      m.language = e.target.value;
+      triggerTrailerSearch('all');
+    });
+  }
+
+  // Video category filter pills
+  card.querySelectorAll('.btn-video-filter').forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      e.preventDefault();
+      card.querySelectorAll('.btn-video-filter').forEach(p => p.classList.remove('active', 'btn-primary'));
+      pill.classList.add('active', 'btn-primary');
+      const filterCat = pill.dataset.cat;
+      const selectEl = card.querySelector('#selectTrailer');
+      if (!selectEl) return;
+      Array.from(selectEl.options).forEach(opt => {
+        if (!opt.dataset.category) return;
+        if (filterCat === 'all' || opt.dataset.category === filterCat) {
+          opt.style.display = '';
+        } else {
+          opt.style.display = 'none';
+        }
+      });
+      if (selectEl.selectedOptions[0]?.style.display === 'none') {
+        const firstVisible = Array.from(selectEl.options).find(o => o.style.display !== 'none');
+        if (firstVisible) {
+          selectEl.value = firstVisible.value;
+          m.selectedTrailer = firstVisible.value;
+          m.trailerUrl = firstVisible.value;
+          m.trailer_url = firstVisible.value;
+          updateAllUI();
+        }
+      }
+    });
+  });
 
   // Search box Enter key and live input sync
   ['#searchMovieTitle', '#searchMovieYear', '#searchMovieActor', '#searchMovieProduction'].forEach(sel => {
@@ -3247,19 +3376,42 @@ async function downloadFileFromUrl(fileUrl, defaultFilename = 'download.jpg') {
 }
 
 // Download MP4 trailer video file directly via server video converter/downloader endpoint
-function downloadTrailerVideo(title, trailerUrl) {
+async function downloadTrailerVideo(title, trailerUrl) {
   if (!trailerUrl) {
     showNotice('No trailer URL available to download.', 'error');
     return;
   }
-  showNotice(`Preparing MP4 trailer download for "${title}"... Please wait.`);
+  showNotice(`Preparing trailer download for "${title}"... Please wait.`);
   const downloadUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}`;
-  const a = document.createElement('a');
-  a.href = downloadUrl;
-  a.target = '_blank';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+
+  try {
+    const res = await fetch(downloadUrl);
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.error || `Server returned ${res.status}`);
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    const blob = await res.blob();
+    const isVideo = contentType.includes('video') || contentType.includes('mp4') || contentType.includes('octet-stream');
+    const ext = isVideo ? 'mp4' : 'url';
+    const filename = `${cleanFileName(title)} Trailer.${ext}`;
+
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(objUrl);
+    showNotice(`Downloaded "${filename}".`);
+  } catch (err) {
+    console.warn('Direct fetch trailer error, falling back to shortcut:', err);
+    // Fallback: download .url shortcut directly on client so user always gets the working trailer link
+    downloadTrailerShortcut(title, trailerUrl);
+    showNotice(`Downloaded trailer shortcut for "${title}".`);
+  }
 }
 
 // Download MP4 trailer videos for all selected movies in batch

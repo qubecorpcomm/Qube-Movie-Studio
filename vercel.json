@@ -2,14 +2,16 @@
   "version": 2,
   "functions": {
     "api/*.mjs": {
-      "includeFiles": "public/**,firebase-applet-config.json"
+      "includeFiles": "public/**,bin/**,firebase-applet-config.json",
+      "maxDuration": 60
     }
   },
   "rewrites": [
     { "source": "/api/pdf", "destination": "/api/pdf.mjs" },
     { "source": "/api/status", "destination": "/api/status.mjs" },
     { "source": "/api/test-keys", "destination": "/api/test-keys.mjs" },
-    { "source": "/api/(.*)", "destination": "/api/index.mjs" },
+    { "source": "/api/download-trailer", "destination": "/api/download-trailer.mjs" },
+    { "source": "/api/(.*)", "destination": "/api/index.mjs?path=$1" },
     { "source": "/api", "destination": "/api/index.mjs" },
     { "source": "/(.*)", "destination": "/api/index.mjs" }
   ]

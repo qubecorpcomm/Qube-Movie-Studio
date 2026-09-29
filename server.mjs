@@ -96,8 +96,29 @@ async function detail(id, language, customApiKey = null) {
   ]);
   let all = [...(videos.results || []), ...(m.videos?.results || [])];
   const seen = new Set();
-  all = all.filter(v => v.site === 'YouTube' && ['Trailer', 'Teaser'].includes(v.type) && !seen.has(v.key) && seen.add(v.key));
-  all = all.map(v => ({ ...v, url: youtubeURL(v.key), score: (v.iso_639_1 === target ? 100 : 0) + (v.official ? 25 : 0) + (v.type === 'Trailer' ? 10 : 0) })).filter(v => v.url).sort((a, b) => b.score - a.score);
+  const allowedTypes = ['Trailer', 'Teaser', 'Clip', 'Featurette', 'Behind the Scenes', 'Music Video', 'Bloopers', 'Song'];
+  all = all.filter(v => v.site === 'YouTube' && (allowedTypes.includes(v.type) || !v.type) && !seen.has(v.key) && seen.add(v.key));
+  all = all.map(v => {
+    const nameLow = (v.name || '').toLowerCase();
+    const typeLow = (v.type || '').toLowerCase();
+    let category = 'Trailer';
+    if (typeLow === 'teaser' || nameLow.includes('teaser') || nameLow.includes('glimpse') || nameLow.includes('first look')) {
+      category = 'Teaser';
+    } else if (nameLow.includes('song') || nameLow.includes('lyric') || nameLow.includes('audio') || typeLow === 'music video' || nameLow.includes('jukebox')) {
+      category = 'Song';
+    } else if (nameLow.includes('promo') || nameLow.includes('sneak peek') || nameLow.includes('spot') || typeLow === 'clip' || typeLow === 'featurette') {
+      category = 'Promo';
+    } else if (typeLow === 'trailer' || nameLow.includes('trailer')) {
+      category = 'Trailer';
+    }
+    return {
+      ...v,
+      category,
+      type: category,
+      url: youtubeURL(v.key),
+      score: (v.iso_639_1 === target ? 100 : 0) + (v.official ? 25 : 0) + (category === 'Trailer' ? 15 : category === 'Teaser' ? 10 : 5)
+    };
+  }).filter(v => v.url).sort((a, b) => b.score - a.score);
   const topCast = (m.credits?.cast || []).slice(0, 5).map(c => c.name).join(', ');
   const topProduction = (m.production_companies || []).slice(0, 3).map(p => p.name).join(', ');
   return {
@@ -254,7 +275,14 @@ async function downloadTrailerVideo(trailerUrl, movieTitle = 'trailer') {
   // Resolve yt-dlp binary location
   const appRoot = fileURLToPath(new URL('.', import.meta.url));
   const localYtDlp = path.join(appRoot, 'bin', 'yt-dlp');
-  const ytDlpCmd = existsSync(localYtDlp) ? localYtDlp : 'yt-dlp';
+
+  let execCmd = 'yt-dlp';
+  let execPrefix = [];
+  if (existsSync(localYtDlp)) {
+    // Run via python3 so it executes regardless of file permission bits
+    execCmd = 'python3';
+    execPrefix = [localYtDlp];
+  }
 
   const safeTitle = (movieTitle || 'trailer')
     .replace(/[^\p{L}\p{N}_-]/gu, '_')
@@ -266,6 +294,7 @@ async function downloadTrailerVideo(trailerUrl, movieTitle = 'trailer') {
   return new Promise((resolve, reject) => {
     // Quality preference: 720p/1080p MP4 with audio merged
     const args = [
+      ...execPrefix,
       '-f', 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[ext=mp4]/best',
       '--merge-output-format', 'mp4',
       '--no-warnings',
@@ -275,7 +304,7 @@ async function downloadTrailerVideo(trailerUrl, movieTitle = 'trailer') {
       trailerUrl
     ];
 
-    const proc = spawn(ytDlpCmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(execCmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
 
     proc.stderr.on('data', chunk => {
@@ -434,9 +463,15 @@ export async function handleRequest(req, res) {
     let reqUrl = req.url || '/';
     const matchedPath = req.headers['x-matched-path'] || req.headers['x-forwarded-uri'] || req.headers['x-original-url'];
     if (matchedPath && !matchedPath.includes('index.mjs') && !matchedPath.includes('.mjs')) {
-      reqUrl = matchedPath;
+      const qIndex = reqUrl.indexOf('?');
+      const query = qIndex !== -1 ? reqUrl.slice(qIndex) : '';
+      reqUrl = matchedPath + (matchedPath.includes('?') ? '' : query);
     }
     const u = new URL(reqUrl, `${proto}://${hostHeader}`);
+    // Support rewrites passing path param, e.g. /api/index.mjs?path=download-trailer
+    if ((u.pathname === '/api/index.mjs' || u.pathname === '/api/index' || u.pathname === '/api') && u.searchParams.get('path')) {
+      u.pathname = '/api/' + u.searchParams.get('path');
+    }
 
     // API is same-origin. Prevent websites using a local server's credentials via browsers.
     if (u.pathname.startsWith('/api/') && req.headers.origin) {
@@ -532,16 +567,39 @@ export async function handleRequest(req, res) {
       const year = (u.searchParams.get('year') || '').trim();
       const actor = (u.searchParams.get('actor') || '').trim();
       const production = (u.searchParams.get('production') || '').trim();
+      const category = (u.searchParams.get('category') || '').trim().toLowerCase();
+      const lang = (u.searchParams.get('language') || '').trim();
       if (!q) throw fail('Enter a search title.');
-      const fullQuery = [q, year, actor, production, 'official trailer'].filter(Boolean).join(' ');
-      const cacheKey = fullQuery.toLowerCase();
+
+      let term = 'official trailer';
+      if (category === 'teaser') term = 'official teaser glimpse';
+      else if (category === 'song') term = 'song promo lyrical video song';
+      else if (category === 'promo') term = 'promo sneak peek clip';
+      else if (category === 'all') term = 'trailer teaser song promo';
+
+      const fullQuery = [q, year, actor, production, lang, term].filter(Boolean).join(' ');
+      const cacheKey = (fullQuery + '_' + category).toLowerCase();
       if (youtubeCache.has(cacheKey)) return send(res, 200, { videos: youtubeCache.get(cacheKey) });
       const url = new URL('https://www.googleapis.com/youtube/v3/search');
-      url.search = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '6', q: fullQuery, key: effectiveYtKey });
+      url.search = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '10', q: fullQuery, key: effectiveYtKey });
       try {
         const d = await api(url);
-        const videos = (d.items || []).map(v => ({ name: v.snippet.title, url: youtubeURL(v.id.videoId), type: 'YouTube search', iso_639_1: '' }));
-        youtubeCache.set(q, videos);
+        const videos = (d.items || []).map(v => {
+          const title = v.snippet.title || '';
+          const tLow = title.toLowerCase();
+          let cat = 'Trailer';
+          if (tLow.includes('teaser') || tLow.includes('glimpse') || tLow.includes('first look')) cat = 'Teaser';
+          else if (tLow.includes('song') || tLow.includes('lyric') || tLow.includes('audio') || tLow.includes('music')) cat = 'Song';
+          else if (tLow.includes('promo') || tLow.includes('sneak peek') || tLow.includes('spot') || tLow.includes('clip')) cat = 'Promo';
+          return {
+            name: title,
+            url: youtubeURL(v.id.videoId),
+            type: cat,
+            category: cat,
+            iso_639_1: ''
+          };
+        });
+        youtubeCache.set(cacheKey, videos);
         return send(res, 200, { videos });
       } catch (err) {
         if (err.message && (err.message.includes('403') || err.message.includes('quota'))) {
@@ -583,7 +641,7 @@ export async function handleRequest(req, res) {
       return send(res, 200, await zip.generateAsync({ type: 'nodebuffer' }), 'application/zip');
     }
 
-    if ((req.method === 'GET' || req.method === 'POST') && u.pathname === '/api/download-trailer') {
+    if ((req.method === 'GET' || req.method === 'POST') && (u.pathname === '/api/download-trailer' || u.pathname.endsWith('/download-trailer') || u.pathname.endsWith('/download-trailer.mjs'))) {
       let trailerUrl = '';
       let title = 'trailer';
 
@@ -596,38 +654,54 @@ export async function handleRequest(req, res) {
         title = u.searchParams.get('title') || 'trailer';
       }
 
+      if (!trailerUrl && u.searchParams.get('v')) {
+        trailerUrl = `https://www.youtube.com/watch?v=${u.searchParams.get('v')}`;
+      }
+
       if (!trailerUrl) {
         throw fail('Trailer URL is required.');
       }
 
-      const media = await downloadTrailerVideo(trailerUrl, title);
+      try {
+        const media = await downloadTrailerVideo(trailerUrl, title);
 
-      res.writeHead(200, {
-        'Content-Type': media.mimeType,
-        'Content-Length': media.fileSize,
-        'Content-Disposition': `attachment; filename="${encodeURIComponent(media.fileName)}"`,
-        'Cache-Control': 'no-cache'
-      });
+        res.writeHead(200, {
+          'Content-Type': media.mimeType,
+          'Content-Length': media.fileSize,
+          'Content-Disposition': `attachment; filename="${encodeURIComponent(media.fileName)}"`,
+          'Cache-Control': 'no-cache'
+        });
 
-      const stream = createReadStream(media.filePath);
-      stream.pipe(res);
+        const stream = createReadStream(media.filePath);
+        stream.pipe(res);
 
-      stream.on('close', async () => {
-        try {
-          await unlink(media.filePath);
-        } catch {}
-      });
+        stream.on('close', async () => {
+          try {
+            await unlink(media.filePath);
+          } catch {}
+        });
 
-      stream.on('error', async (err) => {
-        try {
-          await unlink(media.filePath);
-        } catch {}
-        if (!res.headersSent) {
-          send(res, 500, { error: `Failed to stream video: ${err.message}` });
-        }
-      });
+        stream.on('error', async (err) => {
+          try {
+            await unlink(media.filePath);
+          } catch {}
+          if (!res.headersSent) {
+            send(res, 500, { error: `Failed to stream video: ${err.message}` });
+          }
+        });
 
-      return;
+        return;
+      } catch (err) {
+        console.warn('Trailer video download warning:', err.message);
+        // Fallback: deliver .url shortcut file so user receives the working trailer link immediately
+        const safeTitle = (title || 'trailer').replace(/[/\\?%*:|"<>]/g, '_').trim();
+        res.writeHead(200, {
+          'Content-Type': 'text/x-url',
+          'Content-Disposition': `attachment; filename="${encodeURIComponent(safeTitle)} Trailer.url"`,
+          'Cache-Control': 'no-cache'
+        });
+        return res.end(`[InternetShortcut]\nURL=${trailerUrl}\n`);
+      }
     }
 
     const files = {
