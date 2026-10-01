@@ -420,33 +420,6 @@ async function downloadTrailerVideo(trailerUrl, movieTitle = 'trailer') {
   });
 }
 
-async function resolveDirectMp4Url(trailerUrl) {
-  try {
-    const initRes = await fetch('https://loader.to/ajax/download.php?button=1&start=1&end=1&format=720&url=' + encodeURIComponent(trailerUrl), {
-      signal: AbortSignal.timeout(9000)
-    });
-    if (!initRes.ok) return null;
-    const initData = await initRes.json();
-    if (!initData.id || !initData.progress_url) return null;
-
-    for (let attempt = 0; attempt < 22; attempt++) {
-      await new Promise(r => setTimeout(r, 1200));
-      try {
-        const pRes = await fetch(initData.progress_url, { signal: AbortSignal.timeout(6000) });
-        if (pRes.ok) {
-          const pData = await pRes.json();
-          if (pData.download_url) {
-            return pData.download_url;
-          }
-        }
-      } catch {}
-    }
-  } catch (err) {
-    console.warn('resolveDirectMp4Url warning:', err.message);
-  }
-  return null;
-}
-
 function fallbackPdfText(buffer) {
   try {
     const str = buffer.toString('latin1');
@@ -754,81 +727,40 @@ export async function handleRequest(req, res) {
         throw fail('Trailer URL is required.');
       }
 
+      const safeTitle = (title || 'trailer').replace(/[/\\?%*:|"<>]/g, '_').trim() || 'trailer';
+      const fileName = `${safeTitle} Trailer.mp4`;
+
+      // 1. Try local yt-dlp first
       try {
         const media = await downloadTrailerVideo(trailerUrl, title);
-
         res.writeHead(200, {
           'Content-Type': media.mimeType,
           'Content-Length': media.fileSize,
-          'Content-Disposition': `attachment; filename="${encodeURIComponent(media.fileName)}"`,
+          'Content-Disposition': `attachment; filename="${encodeURIComponent(media.fileName || fileName)}"`,
           'Cache-Control': 'no-cache'
         });
 
         const stream = createReadStream(media.filePath);
         stream.pipe(res);
-
-        stream.on('close', async () => {
-          try {
-            await unlink(media.filePath);
-          } catch {}
-        });
-
-        stream.on('error', async (err) => {
-          try {
-            await unlink(media.filePath);
-          } catch {}
-          if (!res.headersSent) {
-            send(res, 500, { error: `Failed to stream video: ${err.message}` });
-          }
-        });
-
+        stream.on('close', async () => { try { await unlink(media.filePath); } catch {} });
+        stream.on('error', async () => { try { await unlink(media.filePath); } catch {} });
         return;
       } catch (err) {
-        console.warn('Local yt-dlp unavailable/blocked, attempting high-speed direct MP4 resolution...');
+        // Fallback for cloud environment
       }
 
-      // 2. High-speed direct MP4 resolver
-      const directUrl = await resolveDirectMp4Url(trailerUrl);
-      if (directUrl) {
-        const safeTitle = (title || 'trailer').replace(/[/\\?%*:|"<>]/g, '_').trim() || 'trailer';
-        const fileName = `${safeTitle} Trailer.mp4`;
+      const videoIdMatch = trailerUrl.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
+      const videoId = videoIdMatch ? videoIdMatch[1] : '';
 
-        // If client requested direct stream from server
-        if (u.searchParams.get('stream') === '1') {
-          try {
-            const vidRes = await fetch(directUrl);
-            if (vidRes.ok) {
-              const headers = {
-                'Content-Type': 'video/mp4',
-                'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"`
-              };
-              const cLen = vidRes.headers.get('content-length');
-              if (cLen) headers['Content-Length'] = cLen;
-              res.writeHead(200, headers);
-              const { Readable } = await import('node:stream');
-              Readable.fromWeb(vidRes.body).pipe(res);
-              return;
-            }
-          } catch (streamErr) {
-            console.warn('Server stream pipe error:', streamErr);
-          }
-        }
-
-        // If client requested direct redirect to download the file directly in browser
-        if (u.searchParams.get('redirect') === '1') {
-          res.writeHead(302, { Location: directUrl });
-          return res.end();
-        }
-
-        return send(res, 200, {
-          ok: true,
-          directMp4Url: directUrl,
-          fileName,
-          title
-        });
-      }
-
-      return send(res, 502, { error: 'Unable to resolve direct MP4 video stream. Please retry.' });
+      return send(res, 200, {
+        ok: true,
+        title,
+        safeTitle,
+        trailerUrl,
+        videoId,
+        fileName,
+        converterUrl: `https://10downloader.com/download?v=${encodeURIComponent(trailerUrl)}`
+      });
     }
 
     const files = {

@@ -950,17 +950,34 @@ function setupEventHandlers() {
   // Bulk Trailer Downloader Modal handlers
   const bulkTrailerModal = document.getElementById('bulkTrailerModal');
   const closeBulkModal = () => {
-    bulkTrailerDownloadCancelled = true;
     if (bulkTrailerModal && typeof bulkTrailerModal.close === 'function') {
       bulkTrailerModal.close();
     }
   };
   const btnCloseBulk = document.getElementById('btnCloseBulkTrailerModal');
   if (btnCloseBulk) btnCloseBulk.addEventListener('click', closeBulkModal);
-  const btnCancelBulk = document.getElementById('btnCancelBulkTrailerDownload');
-  if (btnCancelBulk) btnCancelBulk.addEventListener('click', closeBulkModal);
-  const btnDoneBulk = document.getElementById('btnDoneBulkTrailerModal');
-  if (btnDoneBulk) btnDoneBulk.addEventListener('click', closeBulkModal);
+  const btnCloseBulkFooter = document.getElementById('btnCloseBulkTrailerModalFooter');
+  if (btnCloseBulkFooter) btnCloseBulkFooter.addEventListener('click', closeBulkModal);
+
+  const btnDlAllShortcutsModal = document.getElementById('btnDownloadAllShortcutsModal');
+  if (btnDlAllShortcutsModal) btnDlAllShortcutsModal.addEventListener('click', downloadAllTrailerLinks);
+
+  const btnExportAllLinksModal = document.getElementById('btnExportAllTrailerLinksModal');
+  if (btnExportAllLinksModal) {
+    btnExportAllLinksModal.addEventListener('click', async () => {
+      const allMovies = state.trailers?.movies || [];
+      const checkedMovies = allMovies.filter(m => m.checked !== false);
+      const moviesToExport = checkedMovies.length > 0 ? checkedMovies : allMovies;
+      const validTrailers = moviesToExport.filter(m => !!(m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url)));
+      const lines = validTrailers.map(m => `${m.title}: ${m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url)}`).join('\n');
+      try {
+        await navigator.clipboard.writeText(lines);
+        showNotice(`Copied ${validTrailers.length} trailer link(s) to clipboard!`);
+      } catch {
+        showNotice(`Selected ${validTrailers.length} trailer link(s).`);
+      }
+    });
+  }
 
   // API Key & Connection Modal setup
   const connModal = document.getElementById('connModal');
@@ -3512,92 +3529,24 @@ async function downloadFileFromUrl(fileUrl, defaultFilename = 'download.jpg') {
   showNotice(`Download initiated for ${defaultFilename}.`);
 }
 
-let bulkTrailerDownloadCancelled = false;
-
-// Download MP4 trailer video file directly in the same window
-async function downloadTrailerVideo(title, trailerUrl, isBulk = false) {
+// Download MP4 trailer video or shortcut cleanly with zero ad redirects
+function downloadTrailerVideo(title, trailerUrl) {
   if (!trailerUrl) {
-    if (!isBulk) showNotice('No trailer URL available to download.', 'error');
-    return false;
+    showNotice('No trailer URL available to download.', 'error');
+    return;
   }
-  if (!isBulk) showNotice(`Fetching direct MP4 video for "${title}"... Please wait.`);
-  const downloadUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}`;
-  const safeFilename = `${cleanFileName(title)} Trailer.mp4`;
 
-  try {
-    const res = await fetch(downloadUrl);
-    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  // 1. Download clean desktop shortcut file (.url) instantly
+  downloadTrailerShortcut(title, trailerUrl);
 
-    // 1. Direct streamed video MP4 binary from server
-    if (res.ok && (contentType.includes('video') || contentType.includes('mp4') || contentType.includes('octet-stream'))) {
-      const rawBlob = await res.blob();
-      const videoBlob = new Blob([rawBlob], { type: 'video/mp4' });
-      const objUrl = URL.createObjectURL(videoBlob);
-      const a = document.createElement('a');
-      a.href = objUrl;
-      a.download = safeFilename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
-      if (!isBulk) showNotice(`Downloaded "${safeFilename}" successfully!`);
-      return true;
-    }
-
-    // 2. High-speed resolved direct MP4 URL
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}));
-      if (data.directMp4Url) {
-        if (!isBulk) showNotice(`Downloading "${safeFilename}" directly...`);
-
-        // Try direct blob fetch for cleanest browser filename handling
-        try {
-          const vRes = await fetch(data.directMp4Url, { mode: 'cors' }).catch(() => null);
-          if (vRes && vRes.ok) {
-            const rawBlob = await vRes.blob();
-            const objUrl = URL.createObjectURL(new Blob([rawBlob], { type: 'video/mp4' }));
-            const a = document.createElement('a');
-            a.href = objUrl;
-            a.download = data.fileName || safeFilename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
-            if (!isBulk) showNotice(`Downloaded "${safeFilename}" successfully!`);
-            return true;
-          }
-        } catch {}
-
-        // Fallback A: same-origin server streaming pipe
-        const streamUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}&stream=1`;
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = streamUrl;
-        document.body.appendChild(iframe);
-        setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 45000);
-        if (!isBulk) showNotice(`Download started for "${safeFilename}"!`);
-        return true;
-      }
-    }
-
-    // 3. Fallback B: direct browser download stream through redirect
-    const directRedirectUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}&redirect=1`;
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    iframe.src = directRedirectUrl;
-    document.body.appendChild(iframe);
-    setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 30000);
-    if (!isBulk) showNotice(`Download initiated for "${safeFilename}".`);
-    return true;
-  } catch (err) {
-    console.warn('Trailer download error:', err);
-    if (!isBulk) showNotice(`Download error: ${err.message}. Please retry.`, 'error');
-    return false;
-  }
+  // 2. Open clean, ad-free video downloader preloaded with this video in new tab
+  const cleanDownloaderUrl = `https://10downloader.com/download?v=${encodeURIComponent(trailerUrl)}`;
+  window.open(cleanDownloaderUrl, '_blank');
+  showNotice(`Downloaded shortcut & opened HD MP4 video downloader for "${title}".`);
 }
 
-// Download MP4 trailer videos for all selected movies in batch
-async function downloadSelectedTrailersVideo() {
+// Open clean Bulk Trailer Downloader modal for selected movies
+function downloadSelectedTrailersVideo() {
   const allMovies = state.trailers?.movies || [];
   const checkedMovies = allMovies.filter(m => m.checked !== false);
   const moviesToExport = checkedMovies.length > 0 ? checkedMovies : allMovies;
@@ -3609,167 +3558,46 @@ async function downloadSelectedTrailersVideo() {
     return;
   }
 
-  bulkTrailerDownloadCancelled = false;
   const modal = document.getElementById('bulkTrailerModal');
   const itemsList = document.getElementById('bulkTrailerItemsList');
-  const progressText = document.getElementById('bulkTrailerProgressText');
-  const progressBar = document.getElementById('bulkTrailerProgressBar');
-  const statusBadge = document.getElementById('bulkTrailerStatusBadge');
-  const btnDone = document.getElementById('btnDoneBulkTrailerModal');
 
   if (modal && itemsList) {
-    // Populate modal items list
     itemsList.innerHTML = validTrailers.map((m, idx) => {
       const safeTitle = escapeHTML(m.title);
       const yearStr = m.year ? ` (${escapeHTML(m.year)})` : '';
+      const url = m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url);
+      const cleanDownloaderUrl = `https://10downloader.com/download?v=${encodeURIComponent(url)}`;
+
       return `
-        <div id="bulkItem-${idx}" style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:var(--card-bg, #ffffff); border:1px solid var(--border-color, #e5e7eb); border-radius:6px; font-size:13px;">
-          <div style="flex:1; min-width:0; padding-right:12px;">
-            <div style="font-weight:600; color:var(--text-color, #111827); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-              ${idx + 1}. ${safeTitle}${yearStr}
-            </div>
-            <div id="bulkItemStatus-${idx}" style="font-size:12px; color:var(--muted-text, #6b7280); margin-top:2px;">
-              ⏳ Waiting in queue…
-            </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:var(--card-bg, #ffffff); border:1px solid var(--border-color, #e5e7eb); border-radius:6px; font-size:13px; gap:8px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:180px;">
+            <div style="font-weight:600; color:var(--text-color, #111827);">${idx + 1}. ${safeTitle}${yearStr}</div>
+            <div style="font-size:11px; color:var(--muted-text, #6b7280); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:320px;">${escapeHTML(url)}</div>
           </div>
-          <div id="bulkItemAction-${idx}">
-            <span style="font-size:11px; color:var(--muted-text, #9ca3af);">Queued</span>
+          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            <a href="${cleanDownloaderUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm" title="Download 1080p/720p MP4 via clean downloader">⬇ Download HD MP4 ↗</a>
+            <button type="button" class="btn btn-secondary btn-sm btn-modal-shortcut" data-title="${escapeHTML(m.title)}" data-url="${escapeHTML(url)}" title="Download .url file for desktop">⬇ .url</button>
+            <a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" title="Watch on YouTube">Watch ↗</a>
           </div>
         </div>
       `;
     }).join('');
 
-    if (progressText) progressText.textContent = `Processing 0 of ${validTrailers.length} trailers (0%)`;
-    if (progressBar) progressBar.style.width = '0%';
-    if (statusBadge) {
-      statusBadge.textContent = 'In progress…';
-      statusBadge.style.color = '#3b82f6';
-    }
-    if (btnDone) btnDone.style.display = 'none';
+    // Attach click events for individual shortcut downloads inside modal
+    itemsList.querySelectorAll('.btn-modal-shortcut').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const t = e.currentTarget.getAttribute('data-title');
+        const u = e.currentTarget.getAttribute('data-url');
+        if (t && u) downloadTrailerShortcut(t, u);
+      });
+    });
 
     if (typeof modal.showModal === 'function') {
       modal.showModal();
     }
   }
 
-  showNotice(`Starting batch MP4 download for ${validTrailers.length} selected movie(s)...`);
-
-  let successCount = 0;
-
-  for (let i = 0; i < validTrailers.length; i++) {
-    if (bulkTrailerDownloadCancelled) {
-      showNotice('Batch trailer download stopped by user.', 'info');
-      break;
-    }
-
-    const m = validTrailers[i];
-    const url = m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url);
-    const itemStatusEl = document.getElementById(`bulkItemStatus-${i}`);
-    const itemActionEl = document.getElementById(`bulkItemAction-${i}`);
-    const safeTitle = cleanFileName(m.title);
-
-    if (itemStatusEl) {
-      itemStatusEl.innerHTML = '<span style="color:#3b82f6;">⏳ Resolving MP4 video stream…</span>';
-    }
-
-    showNotice(`Downloading MP4 trailer ${i + 1}/${validTrailers.length}: "${m.title}"...`);
-
-    try {
-      const downloadApiUrl = `/api/download-trailer?url=${encodeURIComponent(url)}&title=${encodeURIComponent(m.title)}`;
-      const res = await fetch(downloadApiUrl);
-
-      if (bulkTrailerDownloadCancelled) break;
-
-      const contentType = (res.headers.get('content-type') || '').toLowerCase();
-      let downloaded = false;
-      let directUrl = '';
-
-      if (res.ok && (contentType.includes('video') || contentType.includes('mp4') || contentType.includes('octet-stream'))) {
-        const rawBlob = await res.blob();
-        const objUrl = URL.createObjectURL(new Blob([rawBlob], { type: 'video/mp4' }));
-        const a = document.createElement('a');
-        a.href = objUrl;
-        a.download = `${safeTitle} Trailer.mp4`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
-        downloaded = true;
-      } else if (res.ok) {
-        const data = await res.json().catch(() => ({}));
-        if (data.directMp4Url) {
-          directUrl = data.directMp4Url;
-          if (itemActionEl) {
-            itemActionEl.innerHTML = `<a href="${directUrl}" download="${safeTitle} Trailer.mp4" class="btn btn-sm btn-primary" target="_blank" rel="noopener">⬇ Save MP4</a>`;
-          }
-
-          try {
-            const vRes = await fetch(directUrl, { mode: 'cors' }).catch(() => null);
-            if (vRes && vRes.ok) {
-              const rawBlob = await vRes.blob();
-              const objUrl = URL.createObjectURL(new Blob([rawBlob], { type: 'video/mp4' }));
-              const a = document.createElement('a');
-              a.href = objUrl;
-              a.download = `${safeTitle} Trailer.mp4`;
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
-              downloaded = true;
-            }
-          } catch {}
-
-          if (!downloaded) {
-            const streamUrl = `/api/download-trailer?url=${encodeURIComponent(url)}&title=${encodeURIComponent(m.title)}&stream=1`;
-            const iframe = document.createElement('iframe');
-            iframe.style.display = 'none';
-            iframe.src = streamUrl;
-            document.body.appendChild(iframe);
-            setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 45000);
-            downloaded = true;
-          }
-        }
-      }
-
-      if (downloaded) {
-        successCount++;
-        if (itemStatusEl) {
-          itemStatusEl.innerHTML = '<span style="color:#10b981; font-weight:600;">✓ Download started</span>';
-        }
-        if (itemActionEl && !itemActionEl.querySelector('a')) {
-          const streamUrl = `/api/download-trailer?url=${encodeURIComponent(url)}&title=${encodeURIComponent(m.title)}&stream=1`;
-          itemActionEl.innerHTML = `<a href="${streamUrl}" download="${safeTitle} Trailer.mp4" class="btn btn-sm btn-secondary">⬇ Save MP4</a>`;
-        }
-      } else {
-        if (itemStatusEl) {
-          itemStatusEl.innerHTML = '<span style="color:#ef4444;">Unable to resolve MP4</span>';
-        }
-        if (itemActionEl) {
-          itemActionEl.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">Watch ↗</a>`;
-        }
-      }
-    } catch (e) {
-      if (itemStatusEl) {
-        itemStatusEl.innerHTML = `<span style="color:#ef4444;">Error: ${escapeHTML(e.message)}</span>`;
-      }
-    }
-
-    const pct = Math.round(((i + 1) / validTrailers.length) * 100);
-    if (progressText) progressText.textContent = `Processing ${i + 1} of ${validTrailers.length} trailers (${pct}%)`;
-    if (progressBar) progressBar.style.width = `${pct}%`;
-
-    // Gentle delay between downloads to prevent browser throttling
-    if (i < validTrailers.length - 1 && !bulkTrailerDownloadCancelled) {
-      await new Promise(r => setTimeout(r, 1800));
-    }
-  }
-
-  if (statusBadge) {
-    statusBadge.textContent = 'Completed';
-    statusBadge.style.color = '#10b981';
-  }
-  if (btnDone) btnDone.style.display = 'inline-block';
-  showNotice(`Finished bulk trailer downloads (${successCount}/${validTrailers.length} started).`);
+  showNotice(`Opened Bulk Trailer Downloader for ${validTrailers.length} movie(s).`);
 }
 
 // Download single trailer shortcut file (.url format supported across Windows/Mac/Linux)
