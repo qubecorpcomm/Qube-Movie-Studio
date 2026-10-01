@@ -3529,23 +3529,20 @@ async function downloadFileFromUrl(fileUrl, defaultFilename = 'download.jpg') {
   showNotice(`Download initiated for ${defaultFilename}.`);
 }
 
-// Download MP4 trailer video or shortcut cleanly with zero ad redirects
+// Download direct MP4 trailer video cleanly with zero ad redirects
 function downloadTrailerVideo(title, trailerUrl) {
   if (!trailerUrl) {
     showNotice('No trailer URL available to download.', 'error');
     return;
   }
 
-  // 1. Download clean desktop shortcut file (.url) instantly
-  downloadTrailerShortcut(title, trailerUrl);
-
-  // 2. Open clean, ad-free video downloader preloaded with this video in new tab
+  // Open clean, ad-free video downloader preloaded with this video in new tab
   const cleanDownloaderUrl = `https://10downloader.com/download?v=${encodeURIComponent(trailerUrl)}`;
   window.open(cleanDownloaderUrl, '_blank');
-  showNotice(`Downloaded shortcut & opened HD MP4 video downloader for "${title}".`);
+  showNotice(`Opening direct MP4 video downloader for "${title}". Click "Download MP4" to save.`);
 }
 
-// Open clean Bulk Trailer Downloader modal for selected movies
+// Open clean Bulk MP4 Trailer Downloader modal for selected movies
 function downloadSelectedTrailersVideo() {
   const allMovies = state.trailers?.movies || [];
   const checkedMovies = allMovies.filter(m => m.checked !== false);
@@ -3567,6 +3564,7 @@ function downloadSelectedTrailersVideo() {
       const yearStr = m.year ? ` (${escapeHTML(m.year)})` : '';
       const url = m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url);
       const cleanDownloaderUrl = `https://10downloader.com/download?v=${encodeURIComponent(url)}`;
+      const saveFromUrl = `https://en.savefrom.net/#url=${encodeURIComponent(url)}`;
 
       return `
         <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:var(--card-bg, #ffffff); border:1px solid var(--border-color, #e5e7eb); border-radius:6px; font-size:13px; gap:8px; flex-wrap:wrap;">
@@ -3575,36 +3573,27 @@ function downloadSelectedTrailersVideo() {
             <div style="font-size:11px; color:var(--muted-text, #6b7280); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:320px;">${escapeHTML(url)}</div>
           </div>
           <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-            <a href="${cleanDownloaderUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm" title="Download 1080p/720p MP4 via clean downloader">⬇ Download HD MP4 ↗</a>
-            <button type="button" class="btn btn-secondary btn-sm btn-modal-shortcut" data-title="${escapeHTML(m.title)}" data-url="${escapeHTML(url)}" title="Download .url file for desktop">⬇ .url</button>
+            <a href="${cleanDownloaderUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm" title="Download direct MP4 video file">⬇ Download .mp4 (HD) ↗</a>
+            <a href="${saveFromUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" title="Alternative MP4 converter">SaveFrom (.mp4) ↗</a>
             <a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" title="Watch on YouTube">Watch ↗</a>
           </div>
         </div>
       `;
     }).join('');
 
-    // Attach click events for individual shortcut downloads inside modal
-    itemsList.querySelectorAll('.btn-modal-shortcut').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const t = e.currentTarget.getAttribute('data-title');
-        const u = e.currentTarget.getAttribute('data-url');
-        if (t && u) downloadTrailerShortcut(t, u);
-      });
-    });
-
     if (typeof modal.showModal === 'function') {
       modal.showModal();
     }
   }
 
-  showNotice(`Opened Bulk Trailer Downloader for ${validTrailers.length} movie(s).`);
+  showNotice(`Opened Bulk MP4 Trailer Downloader for ${validTrailers.length} movie(s).`);
 }
 
 // Download single trailer shortcut file (.url format supported across Windows/Mac/Linux)
 function downloadTrailerShortcut(title, trailerUrl) {
   const safeTitle = cleanFileName(title);
-  const content = `[InternetShortcut]\nURL=${trailerUrl}\n`;
-  const blob = new Blob([content], { type: 'text/x-url' });
+  const content = `[InternetShortcut]\r\nURL=${trailerUrl}\r\n`;
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -3613,7 +3602,7 @@ function downloadTrailerShortcut(title, trailerUrl) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  showNotice(`Downloaded trailer shortcut for "${title}".`);
+  showNotice(`Downloaded trailer link for "${title}".`);
 }
 
 // Download all posters from selected Artwork collection as a ZIP or sequential files

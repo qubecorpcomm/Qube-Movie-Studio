@@ -579,30 +579,29 @@
 
   <!-- BULK TRAILER DOWNLOAD QUEUE MODAL -->
   <dialog id="bulkTrailerModal" class="app-modal">
-    <div class="modal-content" style="max-width: 650px;">
+    <div class="modal-content" style="max-width: 680px;">
       <div class="modal-header">
-        <h3 class="modal-title">Bulk Trailer Downloader</h3>
+        <h3 class="modal-title">Bulk MP4 Trailer Downloader</h3>
         <button class="btn-close" id="btnCloseBulkTrailerModal" aria-label="Close dialog">&times;</button>
       </div>
       <div class="modal-body">
         <p class="modal-description" id="bulkTrailerModalDesc">
-          Download trailers for your selected movies. Save instant 1-click desktop shortcut files (.url) directly into your movie folders, or open 1080p/720p HD MP4 video downloads.
+          Download direct 1080p / 720p <strong>.mp4</strong> video files for your selected movie trailers:
         </p>
 
         <!-- Quick Action Bar -->
         <div style="display:flex; gap:10px; margin: 12px 0 16px 0; flex-wrap:wrap;">
-          <button class="btn btn-primary btn-sm" id="btnDownloadAllShortcutsModal">⬇ Download All Trailer Shortcuts (.url)</button>
-          <button class="btn btn-secondary btn-sm" id="btnExportAllTrailerLinksModal">📋 Copy All Trailer Links</button>
+          <button class="btn btn-primary btn-sm" id="btnExportAllTrailerLinksModal">📋 Copy All Trailer Links (for IDM / 4K Downloader)</button>
         </div>
 
         <!-- Movie Download Items List -->
-        <div class="mini-heading" style="margin-bottom: 8px;">SELECTED TRAILERS</div>
-        <div id="bulkTrailerItemsList" style="max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 4px;">
+        <div class="mini-heading" style="margin-bottom: 8px;">SELECTED TRAILERS FOR MP4 DOWNLOAD</div>
+        <div id="bulkTrailerItemsList" style="max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 4px;">
           <!-- Items inserted dynamically -->
         </div>
 
         <div id="bulkTrailerNotice" class="help-text" style="margin-top: 14px; font-size: 12px; line-height: 1.4; color: var(--muted-text);">
-          💡 <strong>Tip:</strong> Downloading the <strong>.url</strong> shortcut creates a file you can save in your movie folder on Windows or Mac. Double-clicking it plays the full 4K/1080p official trailer instantly!
+          💡 <strong>Tip:</strong> Click <strong>⬇ Download .mp4 (HD) ↗</strong> next to any movie to open the video download page and save the genuine <strong>.mp4</strong> file. You can also copy all links to paste into tools like IDM or 4K Video Downloader.
         </div>
       </div>
       <div class="modal-footer" style="display: flex; justify-content: flex-end; align-items: center;">
