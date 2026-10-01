@@ -730,11 +730,11 @@ export async function handleRequest(req, res) {
       const safeTitle = (title || 'trailer').replace(/[/\\?%*:|"<>]/g, '_').trim() || 'trailer';
       const fileName = `${safeTitle} Trailer.mp4`;
 
-      // 1. Try local yt-dlp first
+      // 1. Try local yt-dlp / video downloader
       try {
         const media = await downloadTrailerVideo(trailerUrl, title);
         res.writeHead(200, {
-          'Content-Type': media.mimeType,
+          'Content-Type': media.mimeType || 'video/mp4',
           'Content-Length': media.fileSize,
           'Content-Disposition': `attachment; filename="${encodeURIComponent(media.fileName || fileName)}"`,
           'Cache-Control': 'no-cache'
@@ -746,20 +746,12 @@ export async function handleRequest(req, res) {
         stream.on('error', async () => { try { await unlink(media.filePath); } catch {} });
         return;
       } catch (err) {
-        // Fallback for cloud environment
+        console.warn('Trailer download error:', err.message);
       }
 
-      const videoIdMatch = trailerUrl.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
-      const videoId = videoIdMatch ? videoIdMatch[1] : '';
-
-      return send(res, 200, {
-        ok: true,
-        title,
-        safeTitle,
-        trailerUrl,
-        videoId,
-        fileName,
-        converterUrl: `https://10downloader.com/download?v=${encodeURIComponent(trailerUrl)}`
+      return send(res, 502, {
+        error: 'Direct video stream unavailable on cloud server for this YouTube URL. Copy link for IDM / 4K Downloader or Play In-App.',
+        trailerUrl
       });
     }
 

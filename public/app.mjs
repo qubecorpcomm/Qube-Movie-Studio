@@ -3595,27 +3595,53 @@ function closeTrailerPlayerModal() {
   }
 }
 
-// Download direct MP4 trailer video cleanly inside same origin (0 external sites)
-function downloadTrailerVideo(title, trailerUrl) {
+// Download direct MP4 trailer video cleanly with full binary validation
+async function downloadTrailerVideo(title, trailerUrl) {
   if (!trailerUrl) {
     showNotice('No trailer URL available to download.', 'error');
     return;
   }
 
   const safeFilename = `${cleanFileName(title)} Trailer.mp4`;
-  showNotice(`Downloading direct MP4 trailer for "${title}"... Please wait.`);
+  showNotice(`Requesting MP4 video stream for "${title}"... Please wait.`);
 
   const downloadApiUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}`;
 
-  // Create clean same-origin download anchor
-  const a = document.createElement('a');
-  a.href = downloadApiUrl;
-  a.download = safeFilename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  try {
+    const res = await fetch(downloadApiUrl);
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
 
-  showNotice(`Download initiated for "${safeFilename}".`);
+    // 1. Direct streamed video MP4 binary from server
+    if (res.ok && (contentType.includes('video') || contentType.includes('mp4') || contentType.includes('octet-stream'))) {
+      const rawBlob = await res.blob();
+      if (rawBlob.size < 50000) {
+        showNotice(`Stream incomplete (${Math.round(rawBlob.size/1024)} KB). Link copied to clipboard for IDM / 4K Downloader.`, 'error');
+        try { await navigator.clipboard.writeText(trailerUrl); } catch {}
+        return;
+      }
+
+      const videoBlob = new Blob([rawBlob], { type: 'video/mp4' });
+      const objUrl = URL.createObjectURL(videoBlob);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = safeFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+      showNotice(`Downloaded "${safeFilename}" (${(rawBlob.size / (1024*1024)).toFixed(1)} MB)!`);
+      return;
+    }
+
+    // 2. Server returned error / restriction notice
+    const errData = await res.json().catch(() => ({}));
+    showNotice(errData.error || 'YouTube cloud download restricted. Trailer link copied to clipboard!', 'error');
+    try { await navigator.clipboard.writeText(trailerUrl); } catch {}
+  } catch (err) {
+    console.warn('Trailer download fetch error:', err);
+    showNotice('Download error. Trailer link copied to clipboard for IDM / 4K Downloader.', 'error');
+    try { await navigator.clipboard.writeText(trailerUrl); } catch {}
+  }
 }
 
 // Open clean Bulk MP4 Trailer Downloader modal for selected movies
