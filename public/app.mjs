@@ -975,10 +975,10 @@ function setupEventHandlers() {
       const checkedMovies = allMovies.filter(m => m.checked !== false);
       const moviesToExport = checkedMovies.length > 0 ? checkedMovies : allMovies;
       const validTrailers = moviesToExport.filter(m => !!(m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url)));
-      const lines = validTrailers.map(m => `${m.title}: ${m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url)}`).join('\n');
+      const cleanUrls = validTrailers.map(m => (m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url)).trim()).filter(Boolean).join('\n');
       try {
-        await navigator.clipboard.writeText(lines);
-        showNotice(`Copied ${validTrailers.length} trailer link(s) to clipboard!`);
+        await navigator.clipboard.writeText(cleanUrls);
+        showNotice(`Copied ${validTrailers.length} clean trailer link(s) to clipboard! Ready to paste into 4K Downloader / IDM.`);
       } catch {
         showNotice(`Selected ${validTrailers.length} trailer link(s).`);
       }
@@ -3595,7 +3595,7 @@ function closeTrailerPlayerModal() {
   }
 }
 
-// Download direct MP4 trailer video cleanly with full binary validation
+// Download direct MP4 trailer video cleanly inside same origin
 async function downloadTrailerVideo(title, trailerUrl) {
   if (!trailerUrl) {
     showNotice('No trailer URL available to download.', 'error');
@@ -3603,45 +3603,34 @@ async function downloadTrailerVideo(title, trailerUrl) {
   }
 
   const safeFilename = `${cleanFileName(title)} Trailer.mp4`;
-  showNotice(`Requesting MP4 video stream for "${title}"... Please wait.`);
 
-  const downloadApiUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}`;
-
-  try {
-    const res = await fetch(downloadApiUrl);
-    const contentType = (res.headers.get('content-type') || '').toLowerCase();
-
-    // 1. Direct streamed video MP4 binary from server
-    if (res.ok && (contentType.includes('video') || contentType.includes('mp4') || contentType.includes('octet-stream'))) {
-      const rawBlob = await res.blob();
-      if (rawBlob.size < 50000) {
-        showNotice(`Stream incomplete (${Math.round(rawBlob.size/1024)} KB). Link copied to clipboard for IDM / 4K Downloader.`, 'error');
-        try { await navigator.clipboard.writeText(trailerUrl); } catch {}
+  // If it's already a direct video file URL (.mp4, .webm, .mkv), download binary directly
+  if (trailerUrl.match(/\.(mp4|webm|mkv|mov)(\?.*)?$/i)) {
+    showNotice(`Downloading direct MP4 video for "${title}"... Please wait.`);
+    try {
+      const res = await fetch(trailerUrl);
+      if (res.ok) {
+        const rawBlob = await res.blob();
+        const videoBlob = new Blob([rawBlob], { type: 'video/mp4' });
+        const objUrl = URL.createObjectURL(videoBlob);
+        const a = document.createElement('a');
+        a.href = objUrl;
+        a.download = safeFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+        showNotice(`Downloaded "${safeFilename}" (${(rawBlob.size / (1024*1024)).toFixed(1)} MB)!`);
         return;
       }
-
-      const videoBlob = new Blob([rawBlob], { type: 'video/mp4' });
-      const objUrl = URL.createObjectURL(videoBlob);
-      const a = document.createElement('a');
-      a.href = objUrl;
-      a.download = safeFilename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
-      showNotice(`Downloaded "${safeFilename}" (${(rawBlob.size / (1024*1024)).toFixed(1)} MB)!`);
-      return;
+    } catch (err) {
+      console.warn('Direct MP4 fetch failed, using in-app player:', err);
     }
-
-    // 2. Server returned error / restriction notice
-    const errData = await res.json().catch(() => ({}));
-    showNotice(errData.error || 'YouTube cloud download restricted. Trailer link copied to clipboard!', 'error');
-    try { await navigator.clipboard.writeText(trailerUrl); } catch {}
-  } catch (err) {
-    console.warn('Trailer download fetch error:', err);
-    showNotice('Download error. Trailer link copied to clipboard for IDM / 4K Downloader.', 'error');
-    try { await navigator.clipboard.writeText(trailerUrl); } catch {}
   }
+
+  // Open the In-App Trailer Player & Downloader modal directly inside Qube Movie Studio
+  openTrailerPlayerModal(title, trailerUrl);
+  showNotice(`Opened In-App Trailer Studio for "${title}". Play & manage trailer directly on your page.`);
 }
 
 // Open clean Bulk MP4 Trailer Downloader modal for selected movies
