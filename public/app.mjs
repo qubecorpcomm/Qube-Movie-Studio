@@ -947,6 +947,12 @@ function setupEventHandlers() {
     });
   }
 
+  // In-App Trailer Player Modal handlers
+  const btnClosePlayerModal = document.getElementById('btnCloseTrailerPlayerModal');
+  if (btnClosePlayerModal) btnClosePlayerModal.addEventListener('click', closeTrailerPlayerModal);
+  const btnClosePlayerFooter = document.getElementById('btnCloseTrailerPlayerFooter');
+  if (btnClosePlayerFooter) btnClosePlayerFooter.addEventListener('click', closeTrailerPlayerModal);
+
   // Bulk Trailer Downloader Modal handlers
   const bulkTrailerModal = document.getElementById('bulkTrailerModal');
   const closeBulkModal = () => {
@@ -3529,17 +3535,87 @@ async function downloadFileFromUrl(fileUrl, defaultFilename = 'download.jpg') {
   showNotice(`Download initiated for ${defaultFilename}.`);
 }
 
-// Download direct MP4 trailer video cleanly with zero ad redirects
+// Open in-app trailer video player modal
+function openTrailerPlayerModal(title, trailerUrl) {
+  if (!trailerUrl) {
+    showNotice('No trailer URL available to play.', 'error');
+    return;
+  }
+
+  const modal = document.getElementById('trailerPlayerModal');
+  const titleEl = document.getElementById('trailerPlayerTitle');
+  const iframe = document.getElementById('trailerPlayerIframe');
+  const urlText = document.getElementById('trailerPlayerUrlText');
+
+  if (!modal || !iframe) return;
+
+  const videoIdMatch = trailerUrl.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
+  const videoId = videoIdMatch ? videoIdMatch[1] : '';
+
+  if (titleEl) titleEl.textContent = `${title} - Official Trailer`;
+  if (urlText) urlText.textContent = trailerUrl;
+
+  if (videoId) {
+    iframe.src = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1`;
+  } else {
+    iframe.src = trailerUrl;
+  }
+
+  // Set up copy and download buttons on player
+  const btnCopy = document.getElementById('btnCopyPlayerTrailerLink');
+  if (btnCopy) {
+    btnCopy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(trailerUrl);
+        showNotice('Trailer link copied to clipboard!');
+      } catch {
+        showNotice(`Trailer URL: ${trailerUrl}`);
+      }
+    };
+  }
+
+  const btnDlMp4 = document.getElementById('btnDownloadPlayerTrailerMp4');
+  if (btnDlMp4) {
+    btnDlMp4.onclick = () => {
+      downloadTrailerVideo(title, trailerUrl);
+    };
+  }
+
+  if (typeof modal.showModal === 'function') {
+    modal.showModal();
+  }
+}
+
+function closeTrailerPlayerModal() {
+  const modal = document.getElementById('trailerPlayerModal');
+  const iframe = document.getElementById('trailerPlayerIframe');
+  if (iframe) iframe.src = '';
+  if (modal && typeof modal.close === 'function') {
+    modal.close();
+  }
+}
+
+// Download direct MP4 trailer video cleanly inside same origin (0 external sites)
 function downloadTrailerVideo(title, trailerUrl) {
   if (!trailerUrl) {
     showNotice('No trailer URL available to download.', 'error');
     return;
   }
 
-  // Open clean, ad-free video downloader preloaded with this video in new tab
-  const cleanDownloaderUrl = `https://10downloader.com/download?v=${encodeURIComponent(trailerUrl)}`;
-  window.open(cleanDownloaderUrl, '_blank');
-  showNotice(`Opening direct MP4 video downloader for "${title}". Click "Download MP4" to save.`);
+  const safeFilename = `${cleanFileName(title)} Trailer.mp4`;
+  showNotice(`Downloading direct MP4 trailer for "${title}"... Please wait.`);
+
+  const downloadApiUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}`;
+
+  // Create clean same-origin download anchor
+  const a = document.createElement('a');
+  a.href = downloadApiUrl;
+  a.download = safeFilename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  showNotice(`Download initiated for "${safeFilename}".`);
 }
 
 // Open clean Bulk MP4 Trailer Downloader modal for selected movies
@@ -3563,8 +3639,6 @@ function downloadSelectedTrailersVideo() {
       const safeTitle = escapeHTML(m.title);
       const yearStr = m.year ? ` (${escapeHTML(m.year)})` : '';
       const url = m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url);
-      const cleanDownloaderUrl = `https://10downloader.com/download?v=${encodeURIComponent(url)}`;
-      const saveFromUrl = `https://en.savefrom.net/#url=${encodeURIComponent(url)}`;
 
       return `
         <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:var(--card-bg, #ffffff); border:1px solid var(--border-color, #e5e7eb); border-radius:6px; font-size:13px; gap:8px; flex-wrap:wrap;">
@@ -3573,13 +3647,43 @@ function downloadSelectedTrailersVideo() {
             <div style="font-size:11px; color:var(--muted-text, #6b7280); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:320px;">${escapeHTML(url)}</div>
           </div>
           <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-            <a href="${cleanDownloaderUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm" title="Download direct MP4 video file">⬇ Download .mp4 (HD) ↗</a>
-            <a href="${saveFromUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" title="Alternative MP4 converter">SaveFrom (.mp4) ↗</a>
-            <a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" title="Watch on YouTube">Watch ↗</a>
+            <button type="button" class="btn btn-primary btn-sm btn-play-inapp" data-title="${escapeHTML(m.title)}" data-url="${escapeHTML(url)}">▶ Play In-App</button>
+            <button type="button" class="btn btn-secondary btn-sm btn-dl-inapp" data-title="${escapeHTML(m.title)}" data-url="${escapeHTML(url)}">⬇ Download MP4</button>
+            <button type="button" class="btn btn-secondary btn-sm btn-copy-inapp" data-url="${escapeHTML(url)}">📋 Copy Link</button>
           </div>
         </div>
       `;
     }).join('');
+
+    itemsList.querySelectorAll('.btn-play-inapp').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const t = e.currentTarget.getAttribute('data-title');
+        const u = e.currentTarget.getAttribute('data-url');
+        if (t && u) openTrailerPlayerModal(t, u);
+      });
+    });
+
+    itemsList.querySelectorAll('.btn-dl-inapp').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const t = e.currentTarget.getAttribute('data-title');
+        const u = e.currentTarget.getAttribute('data-url');
+        if (t && u) downloadTrailerVideo(t, u);
+      });
+    });
+
+    itemsList.querySelectorAll('.btn-copy-inapp').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const u = e.currentTarget.getAttribute('data-url');
+        if (u) {
+          try {
+            await navigator.clipboard.writeText(u);
+            showNotice('Trailer link copied to clipboard!');
+          } catch {
+            showNotice(`Trailer link: ${u}`);
+          }
+        }
+      });
+    });
 
     if (typeof modal.showModal === 'function') {
       modal.showModal();

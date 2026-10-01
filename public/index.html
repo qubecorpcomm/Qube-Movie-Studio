@@ -577,31 +577,56 @@
     </div>
   </dialog>
 
+  <!-- IN-APP TRAILER PLAYER MODAL -->
+  <dialog id="trailerPlayerModal" class="app-modal">
+    <div class="modal-content" style="max-width: 800px; width: 92%;">
+      <div class="modal-header">
+        <h3 class="modal-title" id="trailerPlayerTitle">Official Trailer</h3>
+        <button class="btn-close" id="btnCloseTrailerPlayerModal" aria-label="Close player">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 12px 16px;">
+        <div style="position: relative; width: 100%; padding-top: 56.25%; background: #000; border-radius: 8px; overflow: hidden; box-shadow: var(--shadow-md);">
+          <iframe id="trailerPlayerIframe" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; flex-wrap: wrap; gap: 8px;">
+          <span id="trailerPlayerUrlText" style="font-size: 12px; color: var(--muted-text); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 480px;"></span>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" id="btnCopyPlayerTrailerLink">📋 Copy Trailer Link</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btnDownloadPlayerTrailerMp4">⬇ Download MP4 Stream</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end;">
+        <button class="btn btn-secondary" id="btnCloseTrailerPlayerFooter" type="button">Close Player</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- BULK TRAILER DOWNLOAD QUEUE MODAL -->
   <dialog id="bulkTrailerModal" class="app-modal">
-    <div class="modal-content" style="max-width: 680px;">
+    <div class="modal-content" style="max-width: 720px; width: 92%;">
       <div class="modal-header">
         <h3 class="modal-title">Bulk MP4 Trailer Downloader</h3>
         <button class="btn-close" id="btnCloseBulkTrailerModal" aria-label="Close dialog">&times;</button>
       </div>
       <div class="modal-body">
         <p class="modal-description" id="bulkTrailerModalDesc">
-          Download direct 1080p / 720p <strong>.mp4</strong> video files for your selected movie trailers:
+          Download MP4 trailer videos for your selected movies directly inside Qube Movie Studio:
         </p>
 
         <!-- Quick Action Bar -->
         <div style="display:flex; gap:10px; margin: 12px 0 16px 0; flex-wrap:wrap;">
-          <button class="btn btn-primary btn-sm" id="btnExportAllTrailerLinksModal">📋 Copy All Trailer Links (for IDM / 4K Downloader)</button>
+          <button class="btn btn-primary btn-sm" id="btnExportAllTrailerLinksModal">📋 Copy All Trailer Links (for IDM / 4K Downloader / VLC)</button>
         </div>
 
         <!-- Movie Download Items List -->
-        <div class="mini-heading" style="margin-bottom: 8px;">SELECTED TRAILERS FOR MP4 DOWNLOAD</div>
-        <div id="bulkTrailerItemsList" style="max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 4px;">
+        <div class="mini-heading" style="margin-bottom: 8px;">SELECTED TRAILERS</div>
+        <div id="bulkTrailerItemsList" style="max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 4px;">
           <!-- Items inserted dynamically -->
         </div>
 
         <div id="bulkTrailerNotice" class="help-text" style="margin-top: 14px; font-size: 12px; line-height: 1.4; color: var(--muted-text);">
-          💡 <strong>Tip:</strong> Click <strong>⬇ Download .mp4 (HD) ↗</strong> next to any movie to open the video download page and save the genuine <strong>.mp4</strong> file. You can also copy all links to paste into tools like IDM or 4K Video Downloader.
+          💡 <strong>Tip:</strong> Click <strong>▶ Play In-App</strong> to watch trailers directly inside Qube Movie Studio, or click <strong>⬇ Download MP4</strong> to download the video file directly.
         </div>
       </div>
       <div class="modal-footer" style="display: flex; justify-content: flex-end; align-items: center;">
