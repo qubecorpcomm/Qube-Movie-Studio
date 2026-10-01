@@ -157,6 +157,48 @@ async function dependency(pkg) {
 let youtubeQuotaExceeded = false;
 const youtubeCache = new Map();
 
+async function searchYouTubeScraper(query) {
+  if (!query) return [];
+  try {
+    const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9'
+      },
+      signal: AbortSignal.timeout(6000)
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const matches = [...html.matchAll(/\"videoRenderer\":\{\"videoId\":\"([a-zA-Z0-9_-]{11})\"(?:.*?)\"title\":\{\"runs\":\[\{\"text\":\"(.*?)\"\}\]/g)];
+    const seen = new Set();
+    const videos = [];
+    for (const m of matches) {
+      const vidId = m[1];
+      let vidTitle = (m[2] || '').replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+      if (seen.has(vidId)) continue;
+      seen.add(vidId);
+      const tLow = vidTitle.toLowerCase();
+      let cat = 'Trailer';
+      if (tLow.includes('teaser') || tLow.includes('glimpse') || tLow.includes('first look')) cat = 'Teaser';
+      else if (tLow.includes('song') || tLow.includes('lyric') || tLow.includes('audio') || tLow.includes('music')) cat = 'Song';
+      else if (tLow.includes('promo') || tLow.includes('sneak peek') || tLow.includes('spot') || tLow.includes('clip')) cat = 'Promo';
+      videos.push({
+        name: vidTitle,
+        url: `https://www.youtube.com/watch?v=${vidId}`,
+        type: cat,
+        category: cat,
+        iso_639_1: ''
+      });
+      if (videos.length >= 10) break;
+    }
+    return videos;
+  } catch (err) {
+    console.warn('searchYouTubeScraper notice:', err.message);
+    return [];
+  }
+}
+
 async function fetchMovieAssets(title, year, language, customTmdbKey = null, customYtKey = null) {
   let poster_remote = '';
   let tmdb_id = null;
@@ -228,10 +270,19 @@ async function fetchMovieAssets(title, year, language, customTmdbKey = null, cus
       }
     }
 
-    // 3. Fallback YouTube Search URL
+    // 3. Fallback: Search YouTube public interface for real working watch link
     if (!trailer_url) {
       const cleanTitle = title.replace(/[:\-–—]\s*(encore|re-release|re-issue|imax|scope|flat|infinity\s*vision|part\s*\d+).*$/i, '').trim() || title;
-      trailer_url = `https://www.youtube.com/results?search_query=${encodeURIComponent((cleanTitle + ' official trailer').trim())}`;
+      const q = [cleanTitle, year, 'official trailer'].filter(Boolean).join(' ');
+      const scraped = await searchYouTubeScraper(q);
+      if (scraped.length > 0) {
+        trailer_url = scraped[0].url;
+      } else {
+        const fallbackScraped = await searchYouTubeScraper(`${cleanTitle} trailer`);
+        if (fallbackScraped.length > 0) {
+          trailer_url = fallbackScraped[0].url;
+        }
+      }
     }
 
     // 4. Fallback Poster from Wikipedia API if TMDB search returns no poster
@@ -607,6 +658,15 @@ export async function handleRequest(req, res) {
       const fullQuery = [q, year, actor, production, lang, term].filter(Boolean).join(' ');
       const cacheKey = (fullQuery + '_' + category).toLowerCase();
       if (youtubeCache.has(cacheKey)) return send(res, 200, { videos: youtubeCache.get(cacheKey) });
+
+      if (!effectiveYtKey || youtubeQuotaExceeded) {
+        const scraped = await searchYouTubeScraper(fullQuery);
+        if (scraped.length > 0) {
+          youtubeCache.set(cacheKey, scraped);
+          return send(res, 200, { videos: scraped });
+        }
+      }
+
       const url = new URL('https://www.googleapis.com/youtube/v3/search');
       url.search = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '10', q: fullQuery, key: effectiveYtKey });
       try {
@@ -631,9 +691,14 @@ export async function handleRequest(req, res) {
       } catch (err) {
         if (err.message && (err.message.includes('403') || err.message.includes('quota'))) {
           youtubeQuotaExceeded = true;
-          throw fail('YouTube API quota reached for this session. Use manual trailer links.', 403);
         }
-        throw err;
+        // Seamless fallback to web scraper so user always receives active YouTube videos
+        const scraped = await searchYouTubeScraper(fullQuery);
+        if (scraped.length > 0) {
+          youtubeCache.set(cacheKey, scraped);
+          return send(res, 200, { videos: scraped });
+        }
+        return send(res, 200, { videos: [] });
       }
     }
 
@@ -725,17 +790,40 @@ export async function handleRequest(req, res) {
       // 2. High-speed direct MP4 resolver
       const directUrl = await resolveDirectMp4Url(trailerUrl);
       if (directUrl) {
+        const safeTitle = (title || 'trailer').replace(/[/\\?%*:|"<>]/g, '_').trim() || 'trailer';
+        const fileName = `${safeTitle} Trailer.mp4`;
+
+        // If client requested direct stream from server
+        if (u.searchParams.get('stream') === '1') {
+          try {
+            const vidRes = await fetch(directUrl);
+            if (vidRes.ok) {
+              const headers = {
+                'Content-Type': 'video/mp4',
+                'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"`
+              };
+              const cLen = vidRes.headers.get('content-length');
+              if (cLen) headers['Content-Length'] = cLen;
+              res.writeHead(200, headers);
+              const { Readable } = await import('node:stream');
+              Readable.fromWeb(vidRes.body).pipe(res);
+              return;
+            }
+          } catch (streamErr) {
+            console.warn('Server stream pipe error:', streamErr);
+          }
+        }
+
         // If client requested direct redirect to download the file directly in browser
         if (u.searchParams.get('redirect') === '1') {
           res.writeHead(302, { Location: directUrl });
           return res.end();
         }
 
-        const safeTitle = (title || 'trailer').replace(/[/\\?%*:|"<>]/g, '_').trim() || 'trailer';
         return send(res, 200, {
           ok: true,
           directMp4Url: directUrl,
-          fileName: `${safeTitle} Trailer.mp4`,
+          fileName,
           title
         });
       }

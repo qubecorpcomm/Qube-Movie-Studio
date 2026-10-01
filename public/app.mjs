@@ -679,17 +679,125 @@ function showNotice(msg, type = 'info') {
 
 // Global Event Handlers Setup
 function setupEventHandlers() {
-  // Focus active tool's input textarea
-  const btnAddFocus = document.getElementById('btnAddMovieFocus');
-  if (btnAddFocus) {
-    btnAddFocus.addEventListener('click', () => {
-      let inputId = 'artworkInputText';
-      if (state.activeTab === 'trailers') inputId = 'trailersInputText';
-      if (state.activeTab === 'newsletter') inputId = 'newsletterInputText';
-      const el = document.getElementById(inputId);
-      if (el) el.focus();
+  // Top Upload PDF button and global PDF file picker
+  const btnUploadPdfTop = document.getElementById('btnUploadPdfTop');
+  const globalPdfInput = document.getElementById('globalPdfInput');
+  if (btnUploadPdfTop && globalPdfInput) {
+    btnUploadPdfTop.addEventListener('click', () => {
+      globalPdfInput.value = '';
+      globalPdfInput.click();
+    });
+
+    globalPdfInput.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      showNotice(`Processing "${file.name}"... Please wait.`);
+      let text = '';
+
+      if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
+        try {
+          const res = await fetch('/api/pdf', {
+            method: 'POST',
+            body: file
+          });
+          if (res.ok) {
+            const data = await res.json();
+            text = data.text || '';
+          }
+        } catch {}
+
+        // Fallback to client-side PDF.js if available
+        if (!text && window.pdfjsLib) {
+          try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            const pagesText = [];
+            for (let i = 1; i <= pdf.numPages; i++) {
+              const page = await pdf.getPage(i);
+              const textContent = await page.getTextContent();
+              pagesText.push(textContent.items.map(item => item.str).join(' '));
+            }
+            text = pagesText.join('\n');
+          } catch {}
+        }
+      } else {
+        text = await file.text().catch(() => '');
+      }
+
+      if (!text || !text.trim()) {
+        showNotice(`Could not extract movie text from "${file.name}". Please ensure it contains selectable text or paste directly.`, 'error');
+        return;
+      }
+
+      const parsed = parseMovieListText(text);
+      if (parsed.length === 0) {
+        showNotice(`No movie titles detected in "${file.name}".`, 'error');
+        return;
+      }
+
+      const activeKey = state.activeTab || 'artwork';
+      addMoviesToTool(parsed, activeKey);
+      showNotice(`Successfully imported ${parsed.length} movie(s) from "${file.name}" to ${activeKey}!`);
+
+      if (activeKey === 'newsletter') {
+        const bulletinMeta = extractBulletinMetadata(text);
+        if (bulletinMeta) {
+          if (bulletinMeta.scheduleDate) {
+            state.newsletter.scheduleDate = bulletinMeta.scheduleDate;
+            const schedEl = document.getElementById('nlScheduleDate');
+            if (schedEl) schedEl.value = bulletinMeta.scheduleDate;
+            state.newsletter.title = `Theatrical Release Bulletin: ${bulletinMeta.scheduleDate}`;
+            const titleEl = document.getElementById('nlTitle');
+            if (titleEl) titleEl.value = state.newsletter.title;
+          }
+          if (bulletinMeta.helpDeskPhone) {
+            state.newsletter.helpDeskPhone = bulletinMeta.helpDeskPhone;
+            const phoneEl = document.getElementById('nlHelpDeskPhone');
+            if (phoneEl) phoneEl.value = bulletinMeta.helpDeskPhone;
+          }
+          if (bulletinMeta.helpDeskEmail) {
+            state.newsletter.helpDeskEmail = bulletinMeta.helpDeskEmail;
+            const emailEl = document.getElementById('nlHelpDeskEmail');
+            if (emailEl) emailEl.value = bulletinMeta.helpDeskEmail;
+          }
+        }
+      }
+
+      updateAllUI();
+
+      setTimeout(() => {
+        const colSection = document.querySelector('.collection-section') || document.querySelector('.collection-grid');
+        if (colSection) colSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
     });
   }
+
+  // Smooth scroll and focus for Add Movie buttons
+  const handleAddMovieClick = () => {
+    let inputId = 'artworkInputText';
+    if (state.activeTab === 'trailers') inputId = 'trailersInputText';
+    if (state.activeTab === 'newsletter') inputId = 'newsletterInputText';
+    const el = document.getElementById(inputId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.focus();
+      el.style.transition = 'box-shadow 0.3s ease, border-color 0.3s ease';
+      el.style.borderColor = 'var(--primary-green)';
+      el.style.boxShadow = '0 0 0 3px rgba(16, 185, 129, 0.35)';
+      setTimeout(() => {
+        el.style.borderColor = '';
+        el.style.boxShadow = '';
+      }, 2000);
+      showNotice(`Type or paste movie titles into the ${state.activeTab} box below.`);
+    }
+  };
+
+  const btnAddMovieTop = document.getElementById('btnAddMovieTop');
+  if (btnAddMovieTop) btnAddMovieTop.addEventListener('click', handleAddMovieClick);
+
+  const btnAddFocus = document.getElementById('btnAddMovieFocus');
+  if (btnAddFocus) btnAddFocus.addEventListener('click', handleAddMovieClick);
 
   // Bind title addition per tool (strict per-panel isolation)
   const bindAddTitles = (btnId, inputId, toolName, toolKey) => {
@@ -838,6 +946,21 @@ function setupEventHandlers() {
       updateAllUI();
     });
   }
+
+  // Bulk Trailer Downloader Modal handlers
+  const bulkTrailerModal = document.getElementById('bulkTrailerModal');
+  const closeBulkModal = () => {
+    bulkTrailerDownloadCancelled = true;
+    if (bulkTrailerModal && typeof bulkTrailerModal.close === 'function') {
+      bulkTrailerModal.close();
+    }
+  };
+  const btnCloseBulk = document.getElementById('btnCloseBulkTrailerModal');
+  if (btnCloseBulk) btnCloseBulk.addEventListener('click', closeBulkModal);
+  const btnCancelBulk = document.getElementById('btnCancelBulkTrailerDownload');
+  if (btnCancelBulk) btnCancelBulk.addEventListener('click', closeBulkModal);
+  const btnDoneBulk = document.getElementById('btnDoneBulkTrailerModal');
+  if (btnDoneBulk) btnDoneBulk.addEventListener('click', closeBulkModal);
 
   // API Key & Connection Modal setup
   const connModal = document.getElementById('connModal');
@@ -2257,7 +2380,21 @@ async function loadMovieDetailFromTMDB(m, tmdbId) {
     }
 
     if (!m.keepTrailer) {
-      const tUrl = m.videos?.[0]?.url || null;
+      let tUrl = m.videos?.[0]?.url || null;
+      // If TMDB had no videos, automatically search YouTube so every movie gets a working trailer
+      if (!tUrl) {
+        try {
+          const ytUrl = `/api/youtube?q=${encodeURIComponent(m.title)}${m.year ? `&year=${encodeURIComponent(m.year)}` : ''}${m.actor ? `&actor=${encodeURIComponent(m.actor)}` : ''}${m.production ? `&production=${encodeURIComponent(m.production)}` : ''}`;
+          const ytRes = await apiFetch(ytUrl);
+          if (ytRes.ok) {
+            const ytData = await ytRes.json();
+            if (ytData.videos && ytData.videos.length > 0) {
+              m.videos = ytData.videos;
+              tUrl = ytData.videos[0].url;
+            }
+          }
+        } catch {}
+      }
       m.selectedTrailer = tUrl;
       if (tUrl) {
         m.trailerUrl = tUrl;
@@ -3375,62 +3512,87 @@ async function downloadFileFromUrl(fileUrl, defaultFilename = 'download.jpg') {
   showNotice(`Download initiated for ${defaultFilename}.`);
 }
 
+let bulkTrailerDownloadCancelled = false;
+
 // Download MP4 trailer video file directly in the same window
-async function downloadTrailerVideo(title, trailerUrl) {
+async function downloadTrailerVideo(title, trailerUrl, isBulk = false) {
   if (!trailerUrl) {
-    showNotice('No trailer URL available to download.', 'error');
-    return;
+    if (!isBulk) showNotice('No trailer URL available to download.', 'error');
+    return false;
   }
-  showNotice(`Fetching direct MP4 video for "${title}"... Please wait.`);
+  if (!isBulk) showNotice(`Fetching direct MP4 video for "${title}"... Please wait.`);
   const downloadUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}`;
+  const safeFilename = `${cleanFileName(title)} Trailer.mp4`;
 
   try {
     const res = await fetch(downloadUrl);
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
 
-    // 1. Direct streamed video MP4 binary
+    // 1. Direct streamed video MP4 binary from server
     if (res.ok && (contentType.includes('video') || contentType.includes('mp4') || contentType.includes('octet-stream'))) {
       const rawBlob = await res.blob();
       const videoBlob = new Blob([rawBlob], { type: 'video/mp4' });
       const objUrl = URL.createObjectURL(videoBlob);
       const a = document.createElement('a');
       a.href = objUrl;
-      a.download = `${cleanFileName(title)} Trailer.mp4`;
+      a.download = safeFilename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(objUrl);
-      showNotice(`Downloaded "${title} Trailer.mp4" successfully!`);
-      return;
+      setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+      if (!isBulk) showNotice(`Downloaded "${safeFilename}" successfully!`);
+      return true;
     }
 
-    // 2. High-speed resolved direct MP4 URL (downloads directly in browser in same page)
+    // 2. High-speed resolved direct MP4 URL
     if (res.ok) {
       const data = await res.json().catch(() => ({}));
       if (data.directMp4Url) {
-        showNotice(`Downloading "${title} Trailer.mp4" directly...`);
-        const a = document.createElement('a');
-        a.href = data.directMp4Url;
-        a.download = data.fileName || `${cleanFileName(title)} Trailer.mp4`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        showNotice(`Download started for "${title} Trailer.mp4"!`);
-        return;
+        if (!isBulk) showNotice(`Downloading "${safeFilename}" directly...`);
+
+        // Try direct blob fetch for cleanest browser filename handling
+        try {
+          const vRes = await fetch(data.directMp4Url, { mode: 'cors' }).catch(() => null);
+          if (vRes && vRes.ok) {
+            const rawBlob = await vRes.blob();
+            const objUrl = URL.createObjectURL(new Blob([rawBlob], { type: 'video/mp4' }));
+            const a = document.createElement('a');
+            a.href = objUrl;
+            a.download = data.fileName || safeFilename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+            if (!isBulk) showNotice(`Downloaded "${safeFilename}" successfully!`);
+            return true;
+          }
+        } catch {}
+
+        // Fallback A: same-origin server streaming pipe
+        const streamUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}&stream=1`;
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = streamUrl;
+        document.body.appendChild(iframe);
+        setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 45000);
+        if (!isBulk) showNotice(`Download started for "${safeFilename}"!`);
+        return true;
       }
     }
 
-    // 3. Fallback: browser direct download stream through hidden frame (same window, no external site)
+    // 3. Fallback B: direct browser download stream through redirect
     const directRedirectUrl = `/api/download-trailer?url=${encodeURIComponent(trailerUrl)}&title=${encodeURIComponent(title)}&redirect=1`;
     const iframe = document.createElement('iframe');
     iframe.style.display = 'none';
     iframe.src = directRedirectUrl;
     document.body.appendChild(iframe);
     setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 30000);
-    showNotice(`Download initiated for "${title} Trailer.mp4".`);
+    if (!isBulk) showNotice(`Download initiated for "${safeFilename}".`);
+    return true;
   } catch (err) {
     console.warn('Trailer download error:', err);
-    showNotice(`Download error: ${err.message}. Please retry.`, 'error');
+    if (!isBulk) showNotice(`Download error: ${err.message}. Please retry.`, 'error');
+    return false;
   }
 }
 
@@ -3447,21 +3609,167 @@ async function downloadSelectedTrailersVideo() {
     return;
   }
 
-  showNotice(`Initiating MP4 video downloads for ${validTrailers.length} selected movie(s)...`);
+  bulkTrailerDownloadCancelled = false;
+  const modal = document.getElementById('bulkTrailerModal');
+  const itemsList = document.getElementById('bulkTrailerItemsList');
+  const progressText = document.getElementById('bulkTrailerProgressText');
+  const progressBar = document.getElementById('bulkTrailerProgressBar');
+  const statusBadge = document.getElementById('bulkTrailerStatusBadge');
+  const btnDone = document.getElementById('btnDoneBulkTrailerModal');
 
-  for (let i = 0; i < validTrailers.length; i++) {
-    const m = validTrailers[i];
-    const url = m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url);
-    showNotice(`Downloading MP4 trailer video ${i + 1}/${validTrailers.length}: "${m.title}"...`);
+  if (modal && itemsList) {
+    // Populate modal items list
+    itemsList.innerHTML = validTrailers.map((m, idx) => {
+      const safeTitle = escapeHTML(m.title);
+      const yearStr = m.year ? ` (${escapeHTML(m.year)})` : '';
+      return `
+        <div id="bulkItem-${idx}" style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:var(--card-bg, #ffffff); border:1px solid var(--border-color, #e5e7eb); border-radius:6px; font-size:13px;">
+          <div style="flex:1; min-width:0; padding-right:12px;">
+            <div style="font-weight:600; color:var(--text-color, #111827); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+              ${idx + 1}. ${safeTitle}${yearStr}
+            </div>
+            <div id="bulkItemStatus-${idx}" style="font-size:12px; color:var(--muted-text, #6b7280); margin-top:2px;">
+              ⏳ Waiting in queue…
+            </div>
+          </div>
+          <div id="bulkItemAction-${idx}">
+            <span style="font-size:11px; color:var(--muted-text, #9ca3af);">Queued</span>
+          </div>
+        </div>
+      `;
+    }).join('');
 
-    downloadTrailerVideo(m.title, url);
+    if (progressText) progressText.textContent = `Processing 0 of ${validTrailers.length} trailers (0%)`;
+    if (progressBar) progressBar.style.width = '0%';
+    if (statusBadge) {
+      statusBadge.textContent = 'In progress…';
+      statusBadge.style.color = '#3b82f6';
+    }
+    if (btnDone) btnDone.style.display = 'none';
 
-    if (i < validTrailers.length - 1) {
-      await new Promise(r => setTimeout(r, 1500));
+    if (typeof modal.showModal === 'function') {
+      modal.showModal();
     }
   }
 
-  showNotice(`Download tasks started for ${validTrailers.length} selected trailer(s).`);
+  showNotice(`Starting batch MP4 download for ${validTrailers.length} selected movie(s)...`);
+
+  let successCount = 0;
+
+  for (let i = 0; i < validTrailers.length; i++) {
+    if (bulkTrailerDownloadCancelled) {
+      showNotice('Batch trailer download stopped by user.', 'info');
+      break;
+    }
+
+    const m = validTrailers[i];
+    const url = m.trailerUrl || m.selectedTrailer || m.trailer_url || (m.videos && m.videos[0]?.url);
+    const itemStatusEl = document.getElementById(`bulkItemStatus-${i}`);
+    const itemActionEl = document.getElementById(`bulkItemAction-${i}`);
+    const safeTitle = cleanFileName(m.title);
+
+    if (itemStatusEl) {
+      itemStatusEl.innerHTML = '<span style="color:#3b82f6;">⏳ Resolving MP4 video stream…</span>';
+    }
+
+    showNotice(`Downloading MP4 trailer ${i + 1}/${validTrailers.length}: "${m.title}"...`);
+
+    try {
+      const downloadApiUrl = `/api/download-trailer?url=${encodeURIComponent(url)}&title=${encodeURIComponent(m.title)}`;
+      const res = await fetch(downloadApiUrl);
+
+      if (bulkTrailerDownloadCancelled) break;
+
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      let downloaded = false;
+      let directUrl = '';
+
+      if (res.ok && (contentType.includes('video') || contentType.includes('mp4') || contentType.includes('octet-stream'))) {
+        const rawBlob = await res.blob();
+        const objUrl = URL.createObjectURL(new Blob([rawBlob], { type: 'video/mp4' }));
+        const a = document.createElement('a');
+        a.href = objUrl;
+        a.download = `${safeTitle} Trailer.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+        downloaded = true;
+      } else if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.directMp4Url) {
+          directUrl = data.directMp4Url;
+          if (itemActionEl) {
+            itemActionEl.innerHTML = `<a href="${directUrl}" download="${safeTitle} Trailer.mp4" class="btn btn-sm btn-primary" target="_blank" rel="noopener">⬇ Save MP4</a>`;
+          }
+
+          try {
+            const vRes = await fetch(directUrl, { mode: 'cors' }).catch(() => null);
+            if (vRes && vRes.ok) {
+              const rawBlob = await vRes.blob();
+              const objUrl = URL.createObjectURL(new Blob([rawBlob], { type: 'video/mp4' }));
+              const a = document.createElement('a');
+              a.href = objUrl;
+              a.download = `${safeTitle} Trailer.mp4`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+              downloaded = true;
+            }
+          } catch {}
+
+          if (!downloaded) {
+            const streamUrl = `/api/download-trailer?url=${encodeURIComponent(url)}&title=${encodeURIComponent(m.title)}&stream=1`;
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = streamUrl;
+            document.body.appendChild(iframe);
+            setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 45000);
+            downloaded = true;
+          }
+        }
+      }
+
+      if (downloaded) {
+        successCount++;
+        if (itemStatusEl) {
+          itemStatusEl.innerHTML = '<span style="color:#10b981; font-weight:600;">✓ Download started</span>';
+        }
+        if (itemActionEl && !itemActionEl.querySelector('a')) {
+          const streamUrl = `/api/download-trailer?url=${encodeURIComponent(url)}&title=${encodeURIComponent(m.title)}&stream=1`;
+          itemActionEl.innerHTML = `<a href="${streamUrl}" download="${safeTitle} Trailer.mp4" class="btn btn-sm btn-secondary">⬇ Save MP4</a>`;
+        }
+      } else {
+        if (itemStatusEl) {
+          itemStatusEl.innerHTML = '<span style="color:#ef4444;">Unable to resolve MP4</span>';
+        }
+        if (itemActionEl) {
+          itemActionEl.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">Watch ↗</a>`;
+        }
+      }
+    } catch (e) {
+      if (itemStatusEl) {
+        itemStatusEl.innerHTML = `<span style="color:#ef4444;">Error: ${escapeHTML(e.message)}</span>`;
+      }
+    }
+
+    const pct = Math.round(((i + 1) / validTrailers.length) * 100);
+    if (progressText) progressText.textContent = `Processing ${i + 1} of ${validTrailers.length} trailers (${pct}%)`;
+    if (progressBar) progressBar.style.width = `${pct}%`;
+
+    // Gentle delay between downloads to prevent browser throttling
+    if (i < validTrailers.length - 1 && !bulkTrailerDownloadCancelled) {
+      await new Promise(r => setTimeout(r, 1800));
+    }
+  }
+
+  if (statusBadge) {
+    statusBadge.textContent = 'Completed';
+    statusBadge.style.color = '#10b981';
+  }
+  if (btnDone) btnDone.style.display = 'inline-block';
+  showNotice(`Finished bulk trailer downloads (${successCount}/${validTrailers.length} started).`);
 }
 
 // Download single trailer shortcut file (.url format supported across Windows/Mac/Linux)

@@ -29,16 +29,18 @@ test('parseMovieListText handles various list formats', () => {
   assert.equal(movies[2].title, 'Oppenheimer');
 });
 
-test('parseMovieListText handles Qube Wire OCR report format', () => {
+test('parseMovieListText handles Qube Wire OCR report format and keeps distributor clean of CPL details', () => {
   const ocrReport = `
 Avengers Endgame: Encore (2026), English – IMAX 5
-Distributor: IMAX
+Distributor: IMAX \t AvengEndgamEnc-IMX_FTR-L-2D_C_EN-EN-CCAP_INT-TD_IMAX5-HI-VI_4K_MRV_20260912_IMX_SMPTE_OV
 
 AvengEndgamEnc-IMX_FTR-L-2D_C_EN-EN-CCAP_INT-TD_IMAX5-HI-VI_4K_MRV_20260912_IMX_SMPTE_OV
 
 First Frame End Credits: 02:51:07
 First Frame Moving Credits: 02:56:55
 Feature Film Duration: 03:06:44
+CPL Part 1 Duration: 01:30:00
+CPL Part 2 Duration: 01:36:44
   `;
   const movies = parseMovieListText(ocrReport);
   assert.equal(movies.length, 1);
@@ -47,9 +49,28 @@ Feature Film Duration: 03:06:44
   assert.equal(movies[0].distributor, 'IMAX');
   assert.equal(movies[0].featureDuration, '03:06:44');
   assert.equal(movies[0].firstFrameEndCredits, '02:51:07');
+  assert.ok(!movies[0].distributor.includes('FTR'));
+  assert.ok(!movies[0].distributor.includes('CPL'));
 });
 
-test('generateNewsletterHTML outputs HTML string with custom accent color and font family', () => {
+test('generateNewsletterHTML outputs HTML string with custom accent color and font family without CPL Part 1 or Part 2', () => {
+  const movie = {
+    title: 'Dune',
+    year: '2021',
+    cpls: [{ name: 'Dune_FTR_2D' }],
+    cpl_part1_duration: '01:15:00',
+    cpl_part2_duration: '01:20:00',
+    first_frame_end_credits: '02:25:00',
+    first_frame_moving_credits: '02:30:00'
+  };
+  const html = generateNewsletterHTML([movie], { layoutTemplate: 'theatrical-bulletin', accentColor: '#e11d48' });
+  assert.ok(html.includes('Dune'));
+  assert.ok(html.includes('Dune_FTR_2D'));
+  assert.ok(html.includes('First Frame End Credits:'));
+  // Ensure CPL Part 1 and Part 2 are NOT in newsletter
+  assert.ok(!html.includes('CPL Part 1 Duration:'));
+  assert.ok(!html.includes('CPL Part 2 Duration:'));
+
   const htmlOne = generateNewsletterHTML([{ title: 'Dune', year: '2021' }], { layoutTemplate: 'one-column', accentColor: '#e11d48', fontFamily: 'serif' });
   assert.ok(htmlOne.includes('Dune'));
   assert.ok(htmlOne.includes('#e11d48'));

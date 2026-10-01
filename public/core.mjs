@@ -206,6 +206,26 @@ export function parseMovieListText(text) {
 
   const finalizeMovie = () => {
     if (currentMovie && currentMovie.title) {
+      // Ensure distributor and production never contain CPL details
+      if (currentMovie.distributor) {
+        const cplInDist = currentMovie.distributor.match(/([A-Za-z0-9_-]*(?:[_\-]FTR[_\-]|[_\-]TLR[_\-]|SMPTE|IOP)[A-Za-z0-9_-]*)/i);
+        if (cplInDist) {
+          addCpl(currentMovie, cplInDist[1]);
+        }
+        currentMovie.distributor = currentMovie.distributor
+          .replace(/(?:CPL(?:\s*Details|\s*Part\s*\d+)?\s*:?|CPL\b).*$/i, '')
+          .replace(/[A-Za-z0-9_-]*(?:[_\-]FTR[_\-]|[_\-]TLR[_\-]|[_\-]TSR[_\-]|SMPTE_OV|IOP_OV)[A-Za-z0-9_-]*/gi, '')
+          .replace(/\d{2}:\d{2}:\d{2}/g, '')
+          .replace(/^[,\s\-:|]+|[,\s\-:|]+$/g, '').trim();
+      }
+      if (currentMovie.production) {
+        currentMovie.production = currentMovie.production
+          .replace(/(?:CPL(?:\s*Details|\s*Part\s*\d+)?\s*:?|CPL\b).*$/i, '')
+          .replace(/[A-Za-z0-9_-]*(?:[_\-]FTR[_\-]|[_\-]TLR[_\-]|[_\-]TSR[_\-]|SMPTE_OV|IOP_OV)[A-Za-z0-9_-]*/gi, '')
+          .replace(/\d{2}:\d{2}:\d{2}/g, '')
+          .replace(/^[,\s\-:|]+|[,\s\-:|]+$/g, '').trim();
+      }
+
       currentMovie.cplEntries = currentMovie.cpls.map(c => c.name).join('\n');
       currentMovie.featureDuration = currentMovie.feature_duration;
       currentMovie.cplPart1Duration = currentMovie.cpl_part1_duration;
@@ -287,8 +307,8 @@ export function parseMovieListText(text) {
         continue;
       }
 
-      // Line without ":" where next line is Distributor
-      if (isNextDistributor && !line.includes(':') && !/^(HELP DESK|Phone)/i.test(line)) {
+      // Line without ":" where next line is Distributor (ensure it's not a CPL line)
+      if (isNextDistributor && !line.includes(':') && !/^(HELP DESK|Phone)/i.test(line) && !/(?:^|[_\-])FTR(?:[_\-]|\d|$)/i.test(line) && !/(?:SMPTE|IOP)_/i.test(line)) {
         finalizeMovie();
         currentMovie = createMovieRecord(line);
         continue;
@@ -313,7 +333,25 @@ export function parseMovieListText(text) {
 
       const distMatch = line.match(/^Distributor\s*:\s*(.+)/i);
       if (distMatch) {
-        currentMovie.distributor = distMatch[1].trim();
+        let distRaw = distMatch[1].trim();
+        // If there's a tab or CPL token inside the distributor string (common in multi-column PDF layouts)
+        const cplSplitMatch = distRaw.match(/^(.*?)(?:\t|\s{2,}|\s+CPL(?:\s*Details)?\s*:?\s*|\s+(?=[A-Za-z0-9_-]*(?:[_\-]FTR[_\-]|[_\-]TLR[_\-]|SMPTE|OV\b)))(.+)$/i);
+        if (cplSplitMatch) {
+          distRaw = cplSplitMatch[1].trim();
+          const possibleCpl = cplSplitMatch[2].trim();
+          if (possibleCpl) {
+            addCpl(currentMovie, possibleCpl);
+          }
+        }
+
+        // Clean out any leftover CPL patterns, durations or timecodes from distributor
+        distRaw = distRaw.replace(/(?:CPL(?:\s*Details|\s*Part\s*\d+)?\s*:?|CPL\b).*$/i, '');
+        distRaw = distRaw.replace(/[A-Za-z0-9_-]*(?:[_\-]FTR[_\-]|[_\-]TLR[_\-]|[_\-]TSR[_\-]|SMPTE_OV|IOP_OV)[A-Za-z0-9_-]*/gi, '');
+        distRaw = distRaw.replace(/\d{2}:\d{2}:\d{2}/g, '');
+        distRaw = distRaw.replace(/^[,\s\-:|]+|[,\s\-:|]+$/g, '').trim();
+
+        currentMovie.distributor = distRaw;
+        if (!currentMovie.production) currentMovie.production = distRaw;
         continue;
       }
 
@@ -667,12 +705,10 @@ li.checked::marker { content: "\\2612"; }
       }
     }
 
-    const cplPart1 = m.cpl_part1_duration || m.cplPart1Duration || '';
-    const cplPart2 = m.cpl_part2_duration || m.cplPart2Duration || '';
     const ffec = m.first_frame_end_credits || m.firstFrameEndCredits || '';
     const ffmc = m.first_frame_moving_credits || m.firstFrameMovingCredits || '';
 
-    const hasCplDetails = uniqueCpls.length > 0 || cplPart1 || cplPart2 || ffec || ffmc;
+    const hasCplDetails = uniqueCpls.length > 0 || ffec || ffmc;
     let cplBoxHtml = '';
 
     if (hasCplDetails) {
@@ -680,8 +716,6 @@ li.checked::marker { content: "\\2612"; }
         `<div style='font-family:Arial,Helvetica,sans-serif;color:#374151;font-size:13px;margin-bottom:8px;text-align:left;'>${c}</div>`
       ).join('\n');
 
-      const p1Item = cplPart1 ? `<div style='font-family:Arial,Helvetica,sans-serif;color:#374151;font-size:13px;margin-top:4px;text-align:left;'>CPL Part 1 Duration: <strong style='color:#0b1220;margin-left:6px;'>${cplPart1}</strong></div>` : '';
-      const p2Item = cplPart2 ? `<div style='font-family:Arial,Helvetica,sans-serif;color:#374151;font-size:13px;margin-top:4px;text-align:left;'>CPL Part 2 Duration: <strong style='color:#0b1220;margin-left:6px;'>${cplPart2}</strong></div>` : '';
       const ffecItem = ffec ? `<div style='font-family:Arial,Helvetica,sans-serif;color:#374151;font-size:13px;margin-top:6px;text-align:left;'>First Frame End Credits: <strong style='color:#0b1220;margin-left:6px;'>${ffec}</strong></div>` : '';
       const ffmcItem = ffmc ? `<div style='font-family:Arial,Helvetica,sans-serif;color:#374151;font-size:13px;margin-top:4px;text-align:left;'>First Frame Moving Credits: <strong style='color:#0b1220;margin-left:6px;'>${ffmc}</strong></div>` : '';
 
@@ -689,8 +723,6 @@ li.checked::marker { content: "\\2612"; }
 <div style='background:#fbfdff;border:1px solid #eef6ff;border-radius:6px;padding:12px;'>
 <div style='font-family:Arial,Helvetica,sans-serif;color:#0b1220;font-size:13px;font-weight:700;margin-bottom:8px;'>CPL Details</div>
 ${cplLinesItems}
-${p1Item}
-${p2Item}
 ${ffecItem}
 ${ffmcItem}
 </div>
